@@ -16,8 +16,18 @@ public struct Project: Codable, Identifiable, Hashable, Sendable, FetchableRecor
     public var isArchived: Bool
     /// Manuelle Reihenfolge, aufsteigend.
     public var sortOrder: Int
-    /// Optionale Spotify-Playlist (z. B. `spotify:playlist:…`).
-    public var playlistURI: String?
+    /// Optionale Musikquelle: beliebige URI oder URL, z. B. `spotify:playlist:…`,
+    /// `https://music.youtube.com/playlist?list=…`, `https://music.apple.com/…` oder
+    /// `applemusic:playlist:<Name>`. Die Auswertung ist Sache der Musiksteuerung.
+    public var musicSource: String?
+    /// Optionaler Kunde, freier Text.
+    public var client: String?
+    /// Stundensatz in der Währung aus den Einstellungen; `nil` = kein eigener Satz
+    /// (dann gilt der Standard-Stundensatz, falls gesetzt). In SQLite als TEXT gespeichert.
+    public var hourlyRate: Decimal?
+    /// Zeit auf diesem Projekt ist abrechenbar (Vorgabe für alle Einträge, siehe
+    /// `TimeEntry.isBillable`). Standard: wie `isBusiness`.
+    public var isBillable: Bool
     public var createdAt: Date
 
     public init(
@@ -27,7 +37,10 @@ public struct Project: Codable, Identifiable, Hashable, Sendable, FetchableRecor
         isBusiness: Bool = true,
         isArchived: Bool = false,
         sortOrder: Int = 0,
-        playlistURI: String? = nil,
+        musicSource: String? = nil,
+        client: String? = nil,
+        hourlyRate: Decimal? = nil,
+        isBillable: Bool? = nil,
         createdAt: Date = .now
     ) {
         self.id = id
@@ -36,8 +49,43 @@ public struct Project: Codable, Identifiable, Hashable, Sendable, FetchableRecor
         self.isBusiness = isBusiness
         self.isArchived = isArchived
         self.sortOrder = sortOrder
-        self.playlistURI = playlistURI
+        self.musicSource = musicSource
+        self.client = client
+        self.hourlyRate = hourlyRate
+        self.isBillable = isBillable ?? isBusiness
         self.createdAt = createdAt
+    }
+
+    /// Alte Initialisierung mit `playlistURI` (vor v2). Nur für bestehenden Code.
+    @available(*, deprecated, message: "Durch musicSource ersetzt")
+    public init(
+        id: UUID = UUID(),
+        name: String,
+        colorHex: String,
+        isBusiness: Bool = true,
+        isArchived: Bool = false,
+        sortOrder: Int = 0,
+        playlistURI: String?,
+        createdAt: Date = .now
+    ) {
+        self.init(
+            id: id, name: name, colorHex: colorHex, isBusiness: isBusiness, isArchived: isArchived,
+            sortOrder: sortOrder, musicSource: playlistURI, createdAt: createdAt
+        )
+    }
+
+    /// Veralteter Alias für `musicSource` (vor v2 nur Spotify-Playlists).
+    /// Kein gespeichertes Feld – die alte Spalte `playlistURI` wird nicht mehr gelesen oder geschrieben.
+    @available(*, deprecated, renamed: "musicSource")
+    public var playlistURI: String? {
+        get { musicSource }
+        set { musicSource = newValue }
+    }
+
+    /// Gespeicherte Felder. Ausdrücklich aufgeführt, damit der Alias `playlistURI` nie mitkodiert wird.
+    public enum CodingKeys: String, CodingKey {
+        case id, name, colorHex, isBusiness, isArchived, sortOrder
+        case musicSource, client, hourlyRate, isBillable, createdAt
     }
 
     public enum Columns {
@@ -45,6 +93,11 @@ public struct Project: Codable, Identifiable, Hashable, Sendable, FetchableRecor
         public static let name = Column(CodingKeys.name)
         public static let isArchived = Column(CodingKeys.isArchived)
         public static let sortOrder = Column(CodingKeys.sortOrder)
+        public static let isBusiness = Column(CodingKeys.isBusiness)
+        public static let isBillable = Column(CodingKeys.isBillable)
+        public static let client = Column(CodingKeys.client)
+        public static let hourlyRate = Column(CodingKeys.hourlyRate)
+        public static let musicSource = Column(CodingKeys.musicSource)
     }
 }
 
@@ -60,22 +113,31 @@ public struct TimeEntry: Codable, Identifiable, Hashable, Sendable, FetchableRec
     public var endedAt: Date?
     /// Notiz „Nächster Schritt“, beim Stoppen erfasst.
     public var nextStep: String?
+    /// Abrechenbar abweichend vom Projekt; `nil` = vom Projekt erben.
+    public var isBillable: Bool?
 
     public init(
         id: UUID = UUID(),
         projectId: UUID,
         startedAt: Date,
         endedAt: Date? = nil,
-        nextStep: String? = nil
+        nextStep: String? = nil,
+        isBillable: Bool? = nil
     ) {
         self.id = id
         self.projectId = projectId
         self.startedAt = startedAt
         self.endedAt = endedAt
         self.nextStep = nextStep
+        self.isBillable = isBillable
     }
 
     public var isRunning: Bool { endedAt == nil }
+
+    /// Abrechenbarkeit des Eintrags: eigener Wert, sonst der des Projekts.
+    public func effectiveBillable(project: Project) -> Bool {
+        isBillable ?? project.isBillable
+    }
 
     /// Dauer bis `endedAt` bzw. – falls laufend – bis `now`. Nie negativ.
     public func duration(at now: Date = .now) -> TimeInterval {
@@ -88,6 +150,7 @@ public struct TimeEntry: Codable, Identifiable, Hashable, Sendable, FetchableRec
         public static let startedAt = Column(CodingKeys.startedAt)
         public static let endedAt = Column(CodingKeys.endedAt)
         public static let nextStep = Column(CodingKeys.nextStep)
+        public static let isBillable = Column(CodingKeys.isBillable)
     }
 }
 

@@ -147,8 +147,19 @@ private struct ProjectRow<Accessory: View>: View {
     @ViewBuilder var accessory: () -> Accessory
 
     @Environment(TaktStore.self) private var store
+    @Environment(AppSettings.self) private var settings
 
     private var isRunning: Bool { store.running?.project.id == project.id }
+
+    /// „Business · ACME GmbH · 85 EUR/h“ – Kunde und eigener Stundensatz nur, wenn gesetzt.
+    private var subtitle: String {
+        var parts = [project.isBusiness ? "Business" : "Privat"]
+        if let client = project.client, !client.isEmpty { parts.append(client) }
+        if let rate = project.hourlyRate {
+            parts.append("\(HourlyRateField.text(for: rate)) \(settings.currencyCode)/h")
+        }
+        return parts.joined(separator: " · ")
+    }
 
     var body: some View {
         HStack(alignment: .center, spacing: 14) {
@@ -166,16 +177,17 @@ private struct ProjectRow<Accessory: View>: View {
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(Color(hex: project.colorHex))
                     }
-                    if project.playlistURI != nil {
+                    if project.musicSource != nil {
                         Image(systemName: "music.note")
                             .font(.system(size: 10, weight: .semibold))
                             .foregroundStyle(theme.tertiary)
-                            .help("Mit Spotify-Playlist")
+                            .help("Mit Musik")
                     }
                 }
-                Text(project.isBusiness ? "Business" : "Privat")
+                Text(subtitle)
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
             Spacer(minLength: 12)
             accessory()

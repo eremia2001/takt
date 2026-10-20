@@ -65,7 +65,7 @@ struct DatabaseTests {
     @Test("Projekt speichern: Insert, dann Update, Werte bleiben exakt erhalten")
     func saveProject() throws {
         let db = try AppDatabase.inMemory()
-        var project = Project(name: "Kundenportal", colorHex: "#007AFF", playlistURI: "spotify:playlist:1")
+        var project = Project(name: "Kundenportal", colorHex: "#007AFF", musicSource: "spotify:playlist:1")
         try db.saveProject(project)
         #expect(try db.project(id: project.id) == project)
 

@@ -73,3 +73,71 @@ Apple Music, automatische App-Erkennung, Kalender.
 3. Spotify-Steuerung, Pausenerinnerung, „Nächster Schritt“
 4. Berichte + Kennzahlen, CSV-Export/-Import
 5. Menüleiste, globaler Kurzbefehl, Feinschliff
+
+## Abrechnung & Berichte (v2)
+
+Ergänzt das MVP um Stundensätze, Abrechenbarkeit, Berichte, CSV-Export und Toggl-Import.
+Die Tabelle „Entscheidungen“ oben (keine Kunden, keine Stundensätze) gilt insoweit nicht mehr.
+
+### Datenmodell (Migration `v2`)
+
+| Feld | Typ | Bedeutung |
+|---|---|---|
+| `Project.hourlyRate` | `Decimal?`, SQLite **TEXT** | Stundensatz; `nil` = Standard-Stundensatz aus den Einstellungen (falls gesetzt) |
+| `Project.isBillable` | `Bool` | Vorgabe für alle Einträge; Standard = `isBusiness` (Migration: `isBillable = isBusiness`) |
+| `Project.client` | `String?` | Kunde, freier Text |
+| `Project.musicSource` | `String?` | beliebige URI/URL (Spotify, YouTube Music, Apple Music, `applemusic:playlist:<Name>`); Migration übernimmt `playlistURI` |
+| `TimeEntry.isBillable` | `Bool?` | `nil` = vom Projekt erben; `effectiveBillable(project:)` |
+
+- **Decimal-Speicherung:** als TEXT in POSIX-Schreibweise (`"92.35"`). GRDB 7 liest und schreibt
+  `Decimal` nativ so – verlustfrei, kein Double-Rundungsfehler bei Geldbeträgen.
+- `playlistURI` bleibt als veralteter Alias (Computed Property → `musicSource`), damit bestehender
+  Code baut. Die alte Spalte `playlistURI` bleibt in der Datenbank stehen (Rückweg zu v1 möglich),
+  wird aber nicht mehr geschrieben.
+- Migrationen löschen nie Daten; geprüft mit einer echten v1-Datenbank (Tests + Sicherung
+  `takt.sqlite.bak-v1` beim ersten Start der v2-App).
+
+### Berichte (`Reports.swift`)
+
+- Zeiträume: Tag, Woche, Monat, frei. **Wochen beginnen immer montags, KW nach ISO 8601** – auch
+  wenn der Systemkalender anders eingestellt ist. Titel fest deutsch:
+  „Dienstag, 20. Oktober 2026“, „KW 43 · 19.–25. Okt. 2026“, „Oktober 2026“, „1.–15. Okt. 2026“.
+- Einträge werden an den Zeitraumgrenzen zugeschnitten, laufende zählen bis „jetzt“.
+- **Rundung aufwärts, je Eintrag** (nach dem Zuschneiden), Schrittweiten 6/15/30 Minuten oder keine.
+  Ungerundete Werte (`duration`, `total`, `billable`) und gerundete (`rounded…`) stehen nebeneinander;
+  Beträge beruhen immer auf der gerundeten abrechenbaren Zeit. Toleranz 1 ms gegen Gleitkomma-Rauschen.
+- **Betrag** = gerundete abrechenbare Sekunden / 3600 × Satz, kaufmännisch auf Cent je Projektzeile.
+  Satz = Projektsatz, sonst Standard-Stundensatz; ohne Satz kein Betrag (`nil`).
+- Tages-Buckets lückenlos für jeden Kalendertag; Einträge über Mitternacht werden anteilig verteilt.
+  Business/Privat nach `Project.isBusiness`, abrechenbar nach `effectiveBillable`.
+
+### CSV-Export (`CSVExport.swift`)
+
+- Für deutsches Excel: Trennzeichen `;`, Dezimalkomma, UTF-8 mit BOM, Zeilenende CRLF, Felder mit
+  `;`, `"` oder Zeilenumbruch in Anführungszeichen (`"` verdoppelt).
+- Einträge: Datum; Start; Ende; Dauer (h:mm, ungerundet); Dauer (dezimal, gerundet, 2 Stellen);
+  Projekt; Kunde; Business/Privat; Abrechenbar (ja/nein); Stundensatz; Betrag (nur abrechenbar mit
+  Satz); Notiz („Nächster Schritt“). Laufende Einträge: Ende leer, Dauer bis jetzt.
+- Summen: Zeile „Zeitraum“, Leerzeile, Projekttabelle, Summenzeile.
+
+### Toggl-Import (`TogglImport.swift`)
+
+- Liest den „Detailed report“ (CSV, `,`, `YYYY-MM-DD`, `HH:MM:SS`) mit eigenem RFC-4180-Parser
+  (Anführungszeichen, Kommas/Zeilenumbrüche im Feld, CRLF, BOM). Pflicht: Start date/time und
+  End date/time oder Duration. Kaputte Zeilen werden übersprungen und als Hinweis gemeldet.
+- Ablauf: `parse` → Vorschau → Mapping Toggl-Projekt → vorhandenes Projekt oder neu
+  (`suggestedTogglMapping` schlägt gleichnamige Projekte vor) → `importToggl` in einer Transaktion.
+- „Neu anlegen“ verwendet ein vorhandenes Projekt mit gleichem Namen (Groß-/Kleinschreibung egal),
+  damit ein zweiter Import keine doppelten Projekte erzeugt.
+- **Dublettenregel:** Ein Eintrag wird übersprungen, wenn im Zielprojekt bereits ein Eintrag mit
+  gleichem Start und gleichem Ende (±1 s) existiert – auch innerhalb derselben Datei.
+- Toggl „Billable“ wird nur gespeichert, wenn es vom Projekt abweicht; sonst erbt der Eintrag.
+  Die Toggl-Beschreibung landet in der Notiz (`nextStep`).
+
+### Einstellungen
+
+Reiter „Allgemein · Musik · Fokus · Widget · Abrechnung“. Abrechnung: Rundung, Währung
+(3 Buchstaben, Standard EUR), Standard-Stundensatz. In `AppSettings` bereits angelegt für
+Folgearbeiten: `musicProvider` (Spotify/Apple Music/Browser/keine), `browserPauseWithMediaKey`,
+`menuBarEnabled`, `hideDockIcon`, `globalShortcutEnabled`, `globalShortcutKeyCode` (17 = T),
+`globalShortcutModifiers` (⌃⌥⌘).

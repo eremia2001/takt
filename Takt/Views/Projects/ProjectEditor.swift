@@ -10,6 +10,7 @@ struct ProjectDraft: Identifiable {
 /// Sheet zum Anlegen und Bearbeiten eines Projekts.
 struct ProjectEditor: View {
     @Environment(TaktStore.self) private var store
+    @Environment(AppSettings.self) private var settings
     @Environment(\.dismiss) private var dismiss
 
     let draft: ProjectDraft
@@ -18,6 +19,12 @@ struct ProjectEditor: View {
     @State private var colorHex: String
     @State private var isBusiness: Bool
     @State private var playlist: String
+    @State private var client: String
+    @State private var rateText: String
+    @State private var isBillable: Bool
+    /// Solange `true`, folgt „Abrechenbar“ der Art (Business → ja, Privat → nein).
+    /// Wird `false`, sobald der Schalter von Hand umgelegt wird.
+    @State private var billableFollowsKind: Bool
     @State private var errorMessage: String?
 
     /// Namen der Palettenfarben (gleiche Reihenfolge wie `ProjectPalette.colors`) für VoiceOver.
@@ -28,12 +35,29 @@ struct ProjectEditor: View {
         _name = State(initialValue: draft.project?.name ?? "")
         _colorHex = State(initialValue: draft.project?.colorHex ?? "")
         _isBusiness = State(initialValue: draft.project?.isBusiness ?? true)
-        _playlist = State(initialValue: draft.project?.playlistURI ?? "")
+        _playlist = State(initialValue: draft.project?.musicSource ?? "")
+        _client = State(initialValue: draft.project?.client ?? "")
+        _rateText = State(initialValue: HourlyRateField.text(for: draft.project?.hourlyRate))
+        let isBusiness = draft.project?.isBusiness ?? true
+        let isBillable = draft.project?.isBillable ?? isBusiness
+        _isBillable = State(initialValue: isBillable)
+        _billableFollowsKind = State(initialValue: isBillable == isBusiness)
     }
 
     private var isNew: Bool { draft.project == nil }
     private var trimmedName: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var playlistResult: SpotifyLink.Result { SpotifyLink.parse(playlist) }
+    /// Unveränderte, bereits gespeicherte Musikquelle (z. B. eine Nicht-Spotify-URL) bleibt
+    /// erlaubt, auch wenn das Spotify-Feld sie nicht versteht.
+    private var playlistUnchanged: Bool { playlist == (draft.project?.musicSource ?? "") }
+    private var playlistInvalid: Bool { playlistResult == .invalid && !playlistUnchanged }
+    private var rateResult: HourlyRateField.Result { HourlyRateField.parse(rateText) }
+    private var trimmedClient: String { client.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    /// Platzhalter im Stundensatz-Feld: der Standard-Stundensatz, falls gesetzt.
+    private var ratePrompt: String {
+        settings.defaultHourlyRate.map { "Standard \(HourlyRateField.text(for: $0))" } ?? "keiner"
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -53,10 +77,31 @@ struct ProjectEditor: View {
                     Text("Privat").tag(false)
                 }
                 .pickerStyle(.segmented)
+                .onChange(of: isBusiness) {
+                    if billableFollowsKind { isBillable = isBusiness }
+                }
+
+                TextField("Kunde", text: $client, prompt: Text("optional"))
+
+                HourlyRateField(
+                    title: "Stundensatz",
+                    text: $rateText,
+                    currencyCode: settings.currencyCode,
+                    prompt: ratePrompt,
+                    hint: rateText.isEmpty && settings.defaultHourlyRate != nil ? "Leer = Standard-Stundensatz." : nil
+                )
+
+                Toggle("Abrechenbar", isOn: Binding(
+                    get: { isBillable },
+                    set: { newValue in
+                        isBillable = newValue
+                        billableFollowsKind = false
+                    }
+                ))
 
                 VStack(alignment: .leading, spacing: 4) {
                     TextField("Spotify-Playlist", text: $playlist, prompt: Text("Link, optional"))
-                    if playlistResult == .invalid {
+                    if playlistInvalid {
                         Text("Kein gültiger Spotify-Link (Playlist, Album oder Titel).")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -76,7 +121,7 @@ struct ProjectEditor: View {
                     .keyboardShortcut(.cancelAction)
                 Button(isNew ? "Anlegen" : "Sichern", action: save)
                     .keyboardShortcut(.defaultAction)
-                    .disabled(trimmedName.isEmpty || playlistResult == .invalid)
+                    .disabled(trimmedName.isEmpty || playlistInvalid || rateResult == .invalid)
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 16)
@@ -113,10 +158,21 @@ struct ProjectEditor: View {
     }
 
     private func save() {
-        let playlistURI: String?
-        switch playlistResult {
-        case .empty: playlistURI = nil
-        case .valid(let uri): playlistURI = uri
+        let musicSource: String?
+        if playlistUnchanged {
+            musicSource = draft.project?.musicSource
+        } else {
+            switch playlistResult {
+            case .empty: musicSource = nil
+            case .valid(let uri): musicSource = uri
+            case .invalid: return
+            }
+        }
+
+        let hourlyRate: Decimal?
+        switch rateResult {
+        case .empty: hourlyRate = nil
+        case .valid(let rate): hourlyRate = rate
         case .invalid: return
         }
 
@@ -128,7 +184,10 @@ struct ProjectEditor: View {
             isBusiness: isBusiness,
             isArchived: existing?.isArchived ?? false,
             sortOrder: existing?.sortOrder ?? store.nextSortOrder,
-            playlistURI: playlistURI,
+            musicSource: musicSource,
+            client: trimmedClient.isEmpty ? nil : trimmedClient,
+            hourlyRate: hourlyRate,
+            isBillable: isBillable,
             createdAt: existing?.createdAt ?? .now
         )
         if store.saveProject(project) {

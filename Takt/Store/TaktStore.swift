@@ -236,6 +236,44 @@ final class TaktStore {
         write { try $0.deleteEntry(id: entry.id) }
     }
 
+    // MARK: Berichte & Import
+
+    /// Bericht für einen Zeitraum; bei Fehlern `nil` (Meldung in `lastError`).
+    func report(for period: ReportPeriod, rounding: Rounding, defaultHourlyRate: Decimal?, now: Date = .now) -> Report? {
+        guard let database else { return nil }
+        do {
+            return try database.report(for: period, rounding: rounding, defaultHourlyRate: defaultHourlyRate, now: now)
+        } catch {
+            lastError = Self.message(for: error)
+            return nil
+        }
+    }
+
+    /// Einträge, die sich mit dem Intervall überschneiden (z. B. für den CSV-Export).
+    func entries(in interval: DateInterval) -> [TimeEntry] {
+        guard let database else { return [] }
+        do {
+            return try database.entries(in: interval)
+        } catch {
+            lastError = Self.message(for: error)
+            return []
+        }
+    }
+
+    /// Vorschlag Toggl-Projekt → vorhandenes Projekt (gleicher Name), sonst `nil` = neu.
+    func suggestedTogglMapping(for preview: TogglImportPreview) -> [String: UUID?] {
+        (try? database?.suggestedTogglMapping(for: preview)) ?? [:]
+    }
+
+    /// Importiert die Toggl-Vorschau; gibt die Zahl neuer Einträge zurück, bei Fehlern `nil`.
+    func importToggl(_ preview: TogglImportPreview, projectMapping: [String: UUID?], markAsBusiness: Bool) -> Int? {
+        var inserted = 0
+        let ok = write {
+            inserted = try $0.importToggl(preview, projectMapping: projectMapping, markAsBusiness: markAsBusiness)
+        }
+        return ok ? inserted : nil
+    }
+
     // MARK: Hilfen
 
     /// Führt eine Schreiboperation aus; Fehler landen in `lastError`, nie ein Absturz.

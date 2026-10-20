@@ -66,7 +66,9 @@ public final class AppDatabase: Sendable {
         return config
     }
 
-    private static var migrator: DatabaseMigrator {
+    /// Alle Migrationen. `internal`, damit Tests eine v1-Datenbank aufbauen können
+    /// (`migrator.migrate(writer, upTo: "v1")`).
+    static var migrator: DatabaseMigrator {
         // Bewusst ohne `eraseDatabaseOnSchemaChange`: echte Zeitdaten nie automatisch löschen.
         var migrator = DatabaseMigrator()
 
@@ -100,6 +102,26 @@ public final class AppDatabase: Sendable {
                 ON timeEntry((endedAt IS NULL))
                 WHERE endedAt IS NULL
                 """)
+        }
+
+        // v2: Abrechnung (Stundensatz, Kunde, abrechenbar) und allgemeine Musikquelle.
+        migrator.registerMigration("v2") { db in
+            try db.alter(table: "project") { t in
+                // Decimal als TEXT in POSIX-Schreibweise („85.5“): verlustfrei, GRDB liest und
+                // schreibt `Decimal` nativ so. NULL = kein eigener Satz.
+                t.add(column: "hourlyRate", .text)
+                t.add(column: "isBillable", .boolean).notNull().defaults(to: false)
+                t.add(column: "client", .text)
+                t.add(column: "musicSource", .text)
+                // Die alte Spalte `playlistURI` bleibt als Altbestand stehen (Rückweg zu v1 ohne
+                // Datenverlust), wird aber nicht mehr geschrieben.
+            }
+            try db.execute(sql: "UPDATE project SET isBillable = isBusiness, musicSource = playlistURI")
+
+            try db.alter(table: "timeEntry") { t in
+                // NULL = Abrechenbarkeit vom Projekt erben.
+                t.add(column: "isBillable", .boolean)
+            }
         }
 
         return migrator
