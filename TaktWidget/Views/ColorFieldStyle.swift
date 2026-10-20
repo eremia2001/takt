@@ -5,8 +5,9 @@ import WidgetKit
 // MARK: - Stil „Farbfläche“
 //
 // Läuft: Das ganze Widget ist die Projektfarbe (sanfter Verlauf, im Dunkelmodus gedämpft),
-// weiße Schrift, sehr große Dauer, weißer Stopp-Knopf.
+// weiße Schrift, sehr große Dauer, weißer Stopp-Knopf. Im großen Widget nur die Karte oben.
 // Pause: neutraler Grund (`.fill.tertiary`), Schnellstarts als farbig getönte Kapseln.
+// In der entsättigten Schreibtisch-Darstellung ersetzt `TaktWidgetContent` den Stil durch „Schlicht“.
 //
 // `ColorFieldBackground` wird in `TaktWidgetView` als `.containerBackground(for: .widget)`
 // gesetzt, die Views hier sind nur der Inhalt (Standard-Padding des Containers).
@@ -41,74 +42,111 @@ struct ColorFieldBackground: View {
 
 // MARK: Läuft
 
-/// Klein: Projekt und Startzeit oben, unten große Dauer und Stopp-Knopf.
-/// Mittel: dieselbe Spalte links, rechts „Weiter mit“ als Glas-Kapseln und die Tagessumme.
+/// Klein: Projekt, Startzeit (und, wenn Platz ist, „Nächster Schritt“) oben, unten große Dauer
+/// mit Stopp-Knopf, Pausenstrich, Wechsel-Punkte und „Heute h:mm“.
+/// Mittel/Karte im großen Widget: dieselbe Spalte links, rechts „Wechseln zu“ als Glas-Kapseln,
+/// im mittleren Widget unten geplanter Block, Budget und Tagessumme.
 struct ColorFieldRunningView: View {
     let family: WidgetFamily
+    let entry: TaktEntry
     let running: RunningState
-    let recent: [Project]
-    let duration: TimeInterval
-    let todayTotal: TimeInterval
 
     private var project: Project { running.project }
+    private var showsFooter: Bool { family == .systemMedium }
 
     var body: some View {
-        if family == .systemMedium {
+        if family == .systemSmall {
+            ViewThatFits(in: .vertical) {
+                small(showsNextStep: true)
+                small(showsNextStep: false)
+            }
+        } else {
             HStack(alignment: .top, spacing: 20) {
-                mainColumn
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                // In der Karte des großen Widgets ist es enger: „Nächster Schritt“ nur, wenn er passt.
+                ViewThatFits(in: .vertical) {
+                    mainColumn(durationSize: family == .systemLarge ? 38 : 48, twoLines: true, showsNextStep: true)
+                    mainColumn(durationSize: family == .systemLarge ? 38 : 48, twoLines: false, showsNextStep: false)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
 
                 VStack(alignment: .leading, spacing: 5) {
-                    if !recent.isEmpty {
-                        Text("Weiter mit")
+                    if !entry.snapshot.switchTargets.isEmpty {
+                        Text("Wechseln zu")
                             .font(.caption)
-                            .foregroundStyle(.white.opacity(0.78))
-                        ForEach(recent.prefix(WidgetSnapshot.maxRecent), id: \.id) { project in
-                            ColorFieldGlassPill(project: project)
+                            .foregroundStyle(.white.opacity(0.8))
+                        ForEach(entry.snapshot.switchTargets.prefix(WidgetSnapshot.maxSwitchTargets), id: \.id) { target in
+                            ColorFieldGlassPill(project: target, actionLabel: "Wechseln zu \(target.name)")
                         }
                     }
                     Spacer(minLength: 0)
-                    Text("Heute \(DurationFormat.hourMinute(todayTotal))")
-                        .font(.caption.weight(.medium))
-                        .monospacedDigit()
-                        .foregroundStyle(.white.opacity(0.78))
-                        .contentTransition(.numericText())
-                        .frame(maxWidth: .infinity, alignment: .trailing)
+                    if showsFooter {
+                        if let block = entry.plannedBlock {
+                            PlannedLine(block: block, date: entry.date, onColorField: true)
+                        }
+                        HStack(spacing: 6) {
+                            if let budget = entry.budget { BudgetLabel(budget: budget, onColorField: true) }
+                            Spacer(minLength: 0)
+                            TodayLabel(total: entry.todayTotal, font: .caption.weight(.medium))
+                                .foregroundStyle(.white.opacity(0.8))
+                        }
+                    }
                 }
-                .frame(width: 150)
+                .frame(width: family == .systemLarge ? 140 : 150)
                 .frame(maxHeight: .infinity)
             }
-        } else {
-            mainColumn
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         }
     }
 
-    private var mainColumn: some View {
+    private func small(showsNextStep: Bool) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(project.name)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.white.opacity(0.95))
-                .lineLimit(1)
-                .truncationMode(.tail)
-            Text("seit \(running.entry.startedAt, format: .dateTime.hour().minute())")
-                .font(.caption)
-                .foregroundStyle(.white.opacity(0.78))
-                .padding(.top, 1)
-            Spacer(minLength: 0)
-            HStack(alignment: .lastTextBaseline, spacing: 8) {
-                Text(DurationFormat.hourMinute(duration))
-                    .font(.system(size: 48, weight: .bold, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundStyle(.white)
-                    .contentTransition(.numericText())
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.6)
-                    .layoutPriority(1)
+            mainColumn(durationSize: 44, twoLines: false, showsNextStep: showsNextStep)
+            HStack(spacing: 6) {
+                SwitchDots(projects: entry.snapshot.switchTargets, onColorField: true)
                 Spacer(minLength: 0)
-                ColorFieldStopButton(color: project.color)
-                    .alignmentGuide(.lastTextBaseline) { $0[.bottom] - 6 }
+                TodayLabel(total: entry.todayTotal, font: .caption.weight(.medium))
+                    .foregroundStyle(.white.opacity(0.8))
             }
+            .frame(height: 20)
+            .padding(.top, 5)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+    }
+
+    private func mainColumn(durationSize: CGFloat, twoLines: Bool, showsNextStep: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ProjectName(name: project.name, font: .subheadline.weight(.semibold), twoLines: twoLines)
+                .foregroundStyle(.white.opacity(0.95))
+            Text("seit \(ClockFormat.time(running.entry.startedAt))")
+                .font(.caption)
+                .monospacedDigit()
+                .foregroundStyle(.white.opacity(0.8))
+                .padding(.top, 1)
+                .layoutPriority(1)
+            if showsNextStep, let step = entry.snapshot.runningNextStep {
+                NextStepLine(text: step, onColorField: true)
+                    .padding(.top, 1)
+                    .layoutPriority(1)
+            }
+            Spacer(minLength: 2)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(alignment: .lastTextBaseline, spacing: 8) {
+                    Text(DurationFormat.hourMinute(entry.runningDuration))
+                        .font(.system(size: durationFontSize(durationSize, for: entry.runningDuration), weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(.white)
+                        .contentTransition(.numericText())
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.5)
+                        .layoutPriority(1)
+                    Spacer(minLength: 0)
+                    ColorFieldStopButton(color: project.color)
+                        .alignmentGuide(.lastTextBaseline) { $0[.bottom] - 6 }
+                }
+                if let fraction = entry.breakFraction {
+                    BreakProgressBar(fraction: fraction, tint: project.color, onColorField: true)
+                }
+            }
+            .layoutPriority(2)
         }
     }
 }
@@ -137,6 +175,7 @@ struct ColorFieldStopButton: View {
 /// Schnellstart auf der Farbfläche: Glas-Kapsel, Farbpunkt mit weißem Rand.
 struct ColorFieldGlassPill: View {
     let project: Project
+    var actionLabel: String? = nil
 
     var body: some View {
         Button(intent: StartTimerIntent(projectID: project.id.uuidString)) {
@@ -158,75 +197,84 @@ struct ColorFieldGlassPill: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(project.name) starten")
+        .accessibilityLabel(actionLabel ?? "\(project.name) starten")
     }
 }
 
 // MARK: Pause
 
-/// Klein: „Nichts läuft“ oben, darunter bis zu drei getönte Kapseln.
-/// Mittel: links die Tagessumme groß, rechts die Kapseln.
+/// Klein: „Nichts läuft“ und „Heute h:mm“ oben, darunter bis zu drei getönte Kapseln
+/// (mit geplantem Block ersetzt er die dritte).
+/// Mittel/Karte im großen Widget: links die Tagessumme groß, rechts die Kapseln.
 /// Ohne Projekte nur der Hinweis, ein Projekt anzulegen.
 struct ColorFieldIdleView: View {
     let family: WidgetFamily
-    let recent: [Project]
-    let todayTotal: TimeInterval
+    let entry: TaktEntry
+
+    private var showsPlanned: Bool { family != .systemLarge }
 
     var body: some View {
-        if recent.isEmpty {
-            VStack(alignment: .leading, spacing: 2) {
+        let projects = quickStartProjects(entry, showsPlanned: showsPlanned)
+        let block = showsPlanned ? entry.plannedBlock : nil
+        if projects.isEmpty && block == nil {
+            EmptyStateView(entry: entry)
+        } else if family == .systemSmall {
+            VStack(alignment: .leading, spacing: 0) {
                 title
-                Text("Projekt in Takt anlegen")
-                    .font(.caption)
+                TodayLabel(total: entry.todayTotal, font: .caption.weight(.medium))
                     .foregroundStyle(.secondary)
+                    .padding(.top, 1)
+                Spacer(minLength: 6)
+                pills(projects, block: block)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        } else if family == .systemMedium {
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        } else {
             HStack(alignment: .top, spacing: 20) {
                 VStack(alignment: .leading, spacing: 0) {
                     title
+                    if let budget = entry.budget {
+                        BudgetLabel(budget: budget).padding(.top, 2)
+                    }
                     Spacer(minLength: 0)
                     // Beschriftung, damit die Tagessumme nicht als laufender Timer gelesen wird.
                     Text("Heute")
                         .font(.caption.weight(.medium))
                         .foregroundStyle(.secondary)
-                    Text(DurationFormat.hourMinute(todayTotal))
-                        .font(.system(size: 48, weight: .bold, design: .rounded))
+                    Text(DurationFormat.hourMinute(entry.todayTotal))
+                        .font(.system(size: durationFontSize(48, for: entry.todayTotal), weight: .bold, design: .rounded))
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                         .contentTransition(.numericText())
                         .lineLimit(1)
-                        .minimumScaleFactor(0.6)
+                        .minimumScaleFactor(0.5)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
 
                 VStack(spacing: 6) {
                     Spacer(minLength: 0)
-                    pills
+                    pills(projects, block: block)
                 }
                 .frame(width: 168)
                 .frame(maxHeight: .infinity)
             }
-        } else {
-            VStack(alignment: .leading, spacing: 0) {
-                title
-                Spacer(minLength: 8)
-                pills
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         }
     }
 
     private var title: some View {
-        Text("Nichts läuft")
+        Text(idleTitle(entry))
             .font(.subheadline.weight(.semibold))
             .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .minimumScaleFactor(0.85)
     }
 
-    private var pills: some View {
+    private func pills(_ projects: [Project], block: WidgetSnapshot.PlannedBlockInfo?) -> some View {
         VStack(spacing: 6) {
-            ForEach(recent.prefix(WidgetSnapshot.maxRecent), id: \.id) { project in
+            ForEach(projects, id: \.id) { project in
                 ColorFieldTintPill(project: project)
+            }
+            if let block {
+                PlannedBlockRow(block: block, date: entry.date, look: .pill)
             }
         }
     }
@@ -260,22 +308,4 @@ struct ColorFieldTintPill: View {
         .buttonStyle(.plain)
         .accessibilityLabel("\(project.name) starten")
     }
-}
-
-// MARK: - Vorschauen
-
-#Preview("Farbfläche klein", as: .systemSmall) {
-    TaktWidget()
-} timeline: {
-    TaktEntry(date: .now, snapshot: .placeholder, style: .colorField)
-    TaktEntry(date: .now, snapshot: .previewIdle, style: .colorField)
-    TaktEntry(date: .now, snapshot: .empty, style: .colorField)
-}
-
-#Preview("Farbfläche mittel", as: .systemMedium) {
-    TaktWidget()
-} timeline: {
-    TaktEntry(date: .now, snapshot: .placeholder, style: .colorField)
-    TaktEntry(date: .now, snapshot: .previewIdle, style: .colorField)
-    TaktEntry(date: .now, snapshot: .empty, style: .colorField)
 }

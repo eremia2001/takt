@@ -226,7 +226,8 @@ Folgearbeiten: `musicProvider` (Spotify/Apple Music/Browser/keine), `browserPaus
 ## Widget v2 – Datenbasis
 
 Grundlage für den Ausbau des Schreibtisch-Widgets (großes Widget, Ein-Projekt-Widget, Wechseln,
-geplanter Block, Budget). Die Widget-Oberfläche selbst folgt getrennt.
+geplanter Block, Budget). Die Oberfläche steht unten unter „Widget v2 – Oberfläche“; sie ersetzt
+für das Widget die MVP-Regeln (nur klein/mittel, keine Listen, keine Einstellungen).
 
 ### Datenmodell (Migration `v3`)
 
@@ -292,3 +293,67 @@ für neue Widgets**.
   (Kategorie `dev.eremiya.takt.planned-block`, Antwort über das Delegate von `BreakReminder`).
   Neu geplant bei jeder Änderung des Blocks und bei jedem Timer-Wechsel; startet vorher ein Timer
   oder wird der Block erledigt, entfällt sie (auch eine schon zugestellte).
+
+## Widget v2 – Oberfläche
+
+Umsetzung in `TaktWidget/` auf Grundlage der Datenbasis oben. Grundsätze bleiben: ein Blick, eine
+Aussage; keine Sekunden; ruhig; Projektfarbe als einziger Akzent; Hell/Dunkel.
+
+### Konfiguration pro Widget
+- `AppIntentConfiguration` mit `TaktWidgetConfigurationIntent` („Widget bearbeiten“): **Stil**
+  (Standard/Schlicht/Farbfläche/Ring; „Standard“ = `SharedSettings.widgetStyle`, bei jedem Laden neu
+  gelesen) und **Projekt** (optional, `ProjectEntity`; vorgeschlagen werden aktive Projekte, ein schon
+  gewähltes archiviertes wird weiter aufgelöst; leer = alle Projekte).
+- `kind` unverändert (`dev.eremiya.takt.widget`): vorhandene Widgets laufen mit den Standardwerten
+  weiter. chronod übernimmt die neue Beschreibung erst, wenn es die Erweiterung als geändert erkennt;
+  für Updates deshalb `CFBundleVersion` erhöhen.
+- Größen: klein, mittel, groß (macOS: 164 × 164, 344 × 164, 344 × 344 pt).
+
+### Ein-Projekt-Widget
+- Zeigt nur das gewählte Projekt. Läuft es: Lauf-Zustand ohne Wechselziele. Läuft ein anderes:
+  Pause-Zustand mit „Läuft: anderes Projekt“ statt „Nichts läuft“ und Start-Zeile (Start wechselt).
+- Tagessumme, Budget, geplanter Block und Tagesleiste beziehen sich nur auf das Projekt; im großen
+  Widget entfällt die Projektliste. Gibt es das Projekt nicht mehr: „Projekt fehlt“.
+
+### Lauf-Zustand (alle Stile)
+- **Wechseln:** klein zwei Farbpunkte (14 pt) unten links, mittel/groß Spalte „Wechseln zu“
+  (`switchTargets`, `StartTimerIntent`).
+- **Nächster Schritt** eine Zeile `.caption` unter dem Projektnamen; im kleinen Widget nur, wenn er
+  in die Höhe passt (`ViewThatFits`).
+- **Pausenstrich:** 2 pt unter der Dauer, Laufzeit / `breakReminderMinutes` (gedeckelt, ab 100 % voll),
+  Projektfarbe 60 %, auf der Farbfläche Weiß; nur mit eingeschalteter Pausenerinnerung.
+- **Budget im Ring:** mit `runningBudget` zeigt der Ring den Verbrauch (live), ab 80 % `#F59E0B`,
+  über 100 % `#EF4444` und voll; darunter „12:30 / 40 h“. In Schlicht/Farbfläche steht das Budget
+  im mittleren/großen Widget als Zahl in der Fußzeile.
+- **Tagessumme** überall „Heute h:mm“ (inkl. laufendem Anteil); im Pause-Zustand mittel/groß groß
+  mit Überschrift „Heute“.
+- Ab zehn Stunden wird die Dauer kleiner gesetzt, damit „12:34“ nie gekürzt wird.
+
+### Geplanter Block
+- Pause: Zeile „14:00 · Kundenportal“ (bzw. „morgen 09:00 · …“) mit Farbpunkt und ▶︎
+  (`StartTimerIntent`); fällig (`isDue`): Grund in Projektfarbe 15 % und „Jetzt: Kundenportal“. Klein und
+  mittel ersetzt sie die dritte Schnellstart-Zeile (das Projekt des Blocks erscheint dann nicht
+  doppelt); im Ring-Stil klein trägt der Start-Knopf im Ring den Block. Fällig wird er zur Zeit über
+  einen zusätzlichen Timeline-Eintrag.
+- Lauf: mittel/groß dezent „Geplant 16:00 · Website“. Gehört der fällige Block zum laufenden
+  Projekt, entfällt er.
+- Großes Widget: in der Fußzeile, mit ×-Knopf (`ClearPlannedBlockIntent`).
+
+### Großes Widget
+- Oben die Karte wie im mittleren Widget (Farbfläche läuft als farbige Karte, der Widget-Grund
+  bleibt neutral), darunter die **Tagesleiste** 8–19 Uhr (erweitert bei Einträgen außerhalb) mit
+  farbigen Abschnitten, Jetzt-Marke und Stundenmarken, darunter **alle Projekte** in zwei Spalten
+  (Farbpunkt, Name, heutige Zeit; das laufende farbig hinterlegt; höchstens 6 Felder mit Fußzeile,
+  sonst 8; darüber „+N weitere“), unten geplanter Block und – solange ein Timer läuft – Budget und
+  „Heute h:mm“ (in Pause steht die Tagessumme groß in der Karte).
+
+### Feinschliff
+- `.contentTransition(.numericText())` für alle Dauern; Pause ↔ läuft mit Überblendung
+  (`.easeInOut(0.35)`), die Farbfläche blendet ein.
+- Lange Projektnamen in der mittleren/großen Karte bis zu zwei Zeilen (`minimumScaleFactor(0.85)`),
+  sonst eine Zeile mit „…“.
+- Galerie-Vorschau (`placeholder`, `snapshot` mit `isPreview`): echte Projekte, das erste (bzw. das
+  feste) läuft simuliert seit 1:24; ohne Projekte `WidgetSnapshot.placeholder`.
+- Entsättigte Schreibtisch-Darstellung (`widgetRenderingMode` `.vibrant`/`.accented`): Farbfläche wird
+  zu Schlicht, Farbpunkte mit Ring, Budget- und Glyphentexte in `.primary`, Akzente `widgetAccentable`.
+- Alle Knöpfe mit Bedienungshilfe-Text („Wechseln zu …“, „Timer stoppen“, „Geplanten Block entfernen“ …).

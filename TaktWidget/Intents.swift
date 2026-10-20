@@ -49,3 +49,22 @@ struct StopTimerIntent: AppIntent {
         return .result()
     }
 }
+
+/// Entfernt den geplanten Block (×-Knopf im großen Widget).
+struct ClearPlannedBlockIntent: AppIntent {
+    static var title: LocalizedStringResource = "Geplanten Block entfernen"
+    static var description = IntentDescription("Entfernt den geplanten nächsten Block.")
+    static var isDiscoverable: Bool = false
+    static var openAppWhenRun: Bool = false
+
+    init() {}
+
+    func perform() async throws -> some IntentResult {
+        guard let database = WidgetDatabase.open() else { return .result() }
+        do {
+            try database.clearPlannedBlock()
+            ChangeNotifier.post()
+        } catch {}
+        return .result()
+    }
+}

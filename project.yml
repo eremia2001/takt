@@ -15,7 +15,7 @@ settings:
     DEVELOPMENT_TEAM: N5GJ4D394X
     ENABLE_HARDENED_RUNTIME: NO
     SWIFT_STRICT_CONCURRENCY: minimal
-    CURRENT_PROJECT_VERSION: 1
+    CURRENT_PROJECT_VERSION: 3
     MARKETING_VERSION: 0.1.0
 
 packages:
@@ -41,6 +41,8 @@ targets:
       properties:
         CFBundleDisplayName: Takt
         CFBundleName: Takt
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleShortVersionString: $(MARKETING_VERSION)
         LSApplicationCategoryType: public.app-category.productivity
         NSAppleEventsUsageDescription: Takt steuert Spotify und die Musik-App, um beim Start eines Timers Musik abzuspielen.
         NSHumanReadableCopyright: ""
@@ -70,6 +72,8 @@ targets:
       path: TaktWidget/Info.plist
       properties:
         CFBundleDisplayName: Takt
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleShortVersionString: $(MARKETING_VERSION)
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
     entitlements:

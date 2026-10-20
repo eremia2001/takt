@@ -3,79 +3,109 @@ import TaktCore
 import WidgetKit
 
 /// Das einzige Widget von Takt: laufender Timer bzw. Schnellstart.
+/// Pro Widget konfigurierbar („Widget bearbeiten“): Stil und optional ein festes Projekt.
+/// `kind` bleibt unverändert, damit vorhandene Widgets weiterlaufen (mit den Standardwerten).
 struct TaktWidget: Widget {
     static let kind = "dev.eremiya.takt.widget"
 
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: Self.kind, provider: Provider()) { entry in
+        AppIntentConfiguration(kind: Self.kind, intent: TaktWidgetConfigurationIntent.self, provider: Provider()) { entry in
             TaktWidgetView(entry: entry)
         }
         .configurationDisplayName("Takt")
-        .description("Zeigt den laufenden Timer. Starten und Stoppen mit einem Klick.")
-        .supportedFamilies([.systemSmall, .systemMedium])
+        .description("Zeigt den laufenden Timer. Starten und Stoppen mit einem Klick. Stil und Projekt pro Widget wählbar.")
+        .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
     }
 }
 
-/// Wählt je nach Stil und Zustand die passende Ansicht; Hintergrund und Klickziel gelten für alle.
+/// Einstieg aus WidgetKit: liest die Größe aus der Umgebung.
 struct TaktWidgetView: View {
     @Environment(\.widgetFamily) private var family
 
     let entry: TaktEntry
 
     var body: some View {
-        content
-            .modifier(WidgetBackground(style: entry.style, running: entry.snapshot.running))
-            .widgetURL(URL(string: "takt://today"))
+        TaktWidgetContent(entry: entry, family: family)
+    }
+}
+
+/// Inhalt samt Hintergrund und Klickziel. Die Größe wird übergeben (statt aus der Umgebung
+/// gelesen), damit sich das Widget auch außerhalb von WidgetKit rendern lässt.
+struct TaktWidgetContent: View {
+    @Environment(\.widgetRenderingMode) private var renderingMode
+
+    let entry: TaktEntry
+    let family: WidgetFamily
+
+    /// In der entsättigten Schreibtisch-Darstellung wird „Farbfläche“ zu „Schlicht“ –
+    /// eine entfärbte Fläche wäre nur ein grauer Block.
+    static func effectiveStyle(_ style: WidgetStyle, renderingMode: WidgetRenderingMode) -> WidgetStyle {
+        style == .colorField && renderingMode != .fullColor ? .plain : style
     }
 
-    @ViewBuilder
-    private var content: some View {
-        let snapshot = entry.snapshot
-        switch (entry.style, snapshot.running) {
-        case (.plain, let running?):
-            RunningView(
-                family: family,
-                running: running,
-                recent: snapshot.recent,
-                duration: entry.runningDuration,
-                todayTotal: entry.todayTotal
-            )
-        case (.plain, nil):
-            IdleView(family: family, recent: snapshot.recent, todayTotal: entry.todayTotal)
-        case (.colorField, let running?):
-            ColorFieldRunningView(
-                family: family,
-                running: running,
-                recent: snapshot.recent,
-                duration: entry.runningDuration,
-                todayTotal: entry.todayTotal
-            )
-        case (.colorField, nil):
-            ColorFieldIdleView(family: family, recent: snapshot.recent, todayTotal: entry.todayTotal)
-        case (.ring, let running?):
-            RingRunningView(
-                family: family,
-                running: running,
-                recent: snapshot.recent,
-                duration: entry.runningDuration,
-                todayTotal: entry.todayTotal
-            )
-        case (.ring, nil):
-            RingIdleView(family: family, recent: snapshot.recent, todayTotal: entry.todayTotal)
+    /// Farbfläche als Widget-Hintergrund: nur im Lauf-Zustand, nicht im großen Widget
+    /// (dort ist nur die Karte farbig).
+    static func usesColorFieldBackground(_ style: WidgetStyle, running: RunningState?, family: WidgetFamily) -> Bool {
+        style == .colorField && running != nil && family != .systemLarge
+    }
+
+    var body: some View {
+        let style = Self.effectiveStyle(entry.style, renderingMode: renderingMode)
+        Group {
+            if family == .systemLarge {
+                LargeView(entry: entry, style: style)
+            } else {
+                WidgetStateView(entry: entry, family: family, style: style)
+            }
+        }
+        // Wechsel Pause ↔ läuft (und Projektwechsel) weich überblenden.
+        .animation(.easeInOut(duration: 0.35), value: entry.running?.entry.id)
+        .modifier(WidgetBackground(
+            project: Self.usesColorFieldBackground(style, running: entry.running, family: family) ? entry.running?.project : nil
+        ))
+        .widgetURL(URL(string: "takt://today"))
+    }
+}
+
+/// Wählt je nach Stil und Zustand die passende Ansicht (klein, mittel bzw. Karte im großen Widget).
+struct WidgetStateView: View {
+    let entry: TaktEntry
+    let family: WidgetFamily
+    let style: WidgetStyle
+
+    var body: some View {
+        if let running = entry.running {
+            Group {
+                switch style {
+                case .plain: RunningView(family: family, entry: entry, running: running)
+                case .colorField: ColorFieldRunningView(family: family, entry: entry, running: running)
+                case .ring: RingRunningView(family: family, entry: entry, running: running)
+                }
+            }
+            .transition(.opacity)
+        } else {
+            Group {
+                switch style {
+                case .plain: IdleView(family: family, entry: entry)
+                case .colorField: ColorFieldIdleView(family: family, entry: entry)
+                case .ring: RingIdleView(family: family, entry: entry)
+                }
+            }
+            .transition(.opacity)
         }
     }
 }
 
-/// Widget-Hintergrund: bei „Farbfläche“ mit laufendem Timer der Verlauf in Projektfarbe,
-/// sonst das Systemmaterial `.fill.tertiary`.
+/// Widget-Hintergrund: mit `project` die Farbfläche (Verlauf in Projektfarbe), sonst das
+/// Systemmaterial `.fill.tertiary`.
 private struct WidgetBackground: ViewModifier {
-    let style: WidgetStyle
-    let running: RunningState?
+    let project: Project?
 
     func body(content: Content) -> some View {
-        if style == .colorField, let running {
+        if let project {
             content.containerBackground(for: .widget) {
-                ColorFieldBackground(project: running.project)
+                ColorFieldBackground(project: project)
+                    .transition(.opacity)
             }
         } else {
             content.containerBackground(.fill.tertiary, for: .widget)
@@ -86,10 +116,18 @@ private struct WidgetBackground: ViewModifier {
 // MARK: - Vorschauen
 
 extension WidgetSnapshot {
-    /// Pause mit drei Schnellstarts und bereits erfasster Zeit.
+    /// Pause mit drei Schnellstarts, geplantem Block und bereits erfasster Zeit.
     static let previewIdle: WidgetSnapshot = {
         let projects = [placeholder.running?.project].compactMap { $0 } + placeholder.recent
-        return WidgetSnapshot(running: nil, recent: projects, todayCompleted: 4 * 3600 + 10 * 60)
+        return WidgetSnapshot(
+            running: nil,
+            recent: projects,
+            todayCompleted: 4 * 3600 + 10 * 60,
+            allProjects: placeholder.allProjects,
+            todayEntries: placeholder.todayEntries.filter { !$0.isRunning },
+            plannedBlock: placeholder.plannedBlock,
+            breakReminderMinutes: placeholder.breakReminderMinutes
+        )
     }()
 
     /// Kein Projekt angelegt (auch Rückfall bei Lesefehlern).
@@ -101,6 +139,8 @@ extension WidgetSnapshot {
 } timeline: {
     TaktEntry(date: .now, snapshot: .placeholder)
     TaktEntry(date: .now, snapshot: .previewIdle)
+    TaktEntry(date: .now, snapshot: .placeholder, style: .colorField)
+    TaktEntry(date: .now, snapshot: .placeholder, style: .ring)
     TaktEntry(date: .now, snapshot: .empty)
 }
 
@@ -109,5 +149,15 @@ extension WidgetSnapshot {
 } timeline: {
     TaktEntry(date: .now, snapshot: .placeholder)
     TaktEntry(date: .now, snapshot: .previewIdle)
-    TaktEntry(date: .now, snapshot: .empty)
+    TaktEntry(date: .now, snapshot: .placeholder, style: .colorField)
+    TaktEntry(date: .now, snapshot: .placeholder, style: .ring)
+}
+
+#Preview("Groß", as: .systemLarge) {
+    TaktWidget()
+} timeline: {
+    TaktEntry(date: .now, snapshot: .placeholder)
+    TaktEntry(date: .now, snapshot: .previewIdle)
+    TaktEntry(date: .now, snapshot: .placeholder, style: .colorField)
+    TaktEntry(date: .now, snapshot: .placeholder, style: .ring)
 }
