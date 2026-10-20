@@ -127,6 +127,9 @@ public struct TimeEntry: Codable, Identifiable, Hashable, Sendable, FetchableRec
     public var nextStep: String?
     /// Abrechenbar abweichend vom Projekt; `nil` = vom Projekt erben.
     public var isBillable: Bool?
+    /// Freie Kennzeichnung, z. B. „Meeting“, „Bugfix“, „Review“ (höchstens eine je Eintrag).
+    /// Beim Speichern über `addEntry`/`updateEntry`/`startTimer` normalisiert, siehe `normalizedTag`.
+    public var tag: String?
 
     public init(
         id: UUID = UUID(),
@@ -134,7 +137,8 @@ public struct TimeEntry: Codable, Identifiable, Hashable, Sendable, FetchableRec
         startedAt: Date,
         endedAt: Date? = nil,
         nextStep: String? = nil,
-        isBillable: Bool? = nil
+        isBillable: Bool? = nil,
+        tag: String? = nil
     ) {
         self.id = id
         self.projectId = projectId
@@ -142,6 +146,21 @@ public struct TimeEntry: Codable, Identifiable, Hashable, Sendable, FetchableRec
         self.endedAt = endedAt
         self.nextStep = nextStep
         self.isBillable = isBillable
+        self.tag = tag
+    }
+
+    /// Höchstlänge eines Tags in Zeichen.
+    public static let maxTagLength = 40
+
+    /// Getrimmt, ohne führende `#`, auf `maxTagLength` Zeichen gekürzt; leer wird zu `nil`.
+    public static func normalizedTag(_ tag: String?) -> String? {
+        guard var text = tag?.trimmingCharacters(in: .whitespacesAndNewlines) else { return nil }
+        while text.hasPrefix("#") { text.removeFirst() }
+        text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.count > maxTagLength {
+            text = String(text.prefix(maxTagLength)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return text.isEmpty ? nil : text
     }
 
     public var isRunning: Bool { endedAt == nil }
@@ -163,6 +182,78 @@ public struct TimeEntry: Codable, Identifiable, Hashable, Sendable, FetchableRec
         public static let endedAt = Column(CodingKeys.endedAt)
         public static let nextStep = Column(CodingKeys.nextStep)
         public static let isBillable = Column(CodingKeys.isBillable)
+        public static let tag = Column(CodingKeys.tag)
+    }
+}
+
+// MARK: - Freier Tag
+
+/// Art eines freien Tags.
+public enum DayOffKind: String, CaseIterable, Codable, Sendable {
+    case vacation
+    case sick
+    case holiday
+    case other
+
+    /// Deutscher Name für die Oberfläche.
+    public var title: String {
+        switch self {
+        case .vacation: "Urlaub"
+        case .sick: "Krank"
+        case .holiday: "Feiertag"
+        case .other: "Sonstiges"
+        }
+    }
+
+    /// Unbekannte Werte (z. B. aus einer neueren App-Version) werden zu `.other`, statt das
+    /// Lesen der ganzen Tabelle scheitern zu lassen.
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = DayOffKind(rawValue: raw) ?? .other
+    }
+}
+
+/// Ein freier Kalendertag (Urlaub, Krankheit, Feiertag …). Höchstens einer je Tag.
+/// Zählt nicht als Arbeitstag, siehe `Report.workdays`.
+public struct DayOff: Codable, Identifiable, Hashable, Sendable, FetchableRecord, PersistableRecord {
+    public static let databaseTableName = "dayOff"
+
+    public var id: UUID
+    /// Kalendertag als `YYYY-MM-DD` (ohne Uhrzeit und Zeitzone), eindeutig.
+    public var date: String
+    public var kind: DayOffKind
+    public var note: String?
+
+    public init(id: UUID = UUID(), date: String, kind: DayOffKind, note: String? = nil) {
+        self.id = id
+        self.date = date
+        self.kind = kind
+        self.note = note
+    }
+
+    /// Legt den freien Tag für den Kalendertag an, in dem `day` liegt.
+    public init(id: UUID = UUID(), day: Date, kind: DayOffKind, note: String? = nil, calendar: Calendar = .current) {
+        self.init(id: id, date: Self.key(for: day, calendar: calendar), kind: kind, note: note)
+    }
+
+    /// `YYYY-MM-DD` des Kalendertags, in dem `date` im Kalender liegt.
+    public static func key(for date: Date, calendar: Calendar = .current) -> String {
+        let c = calendar.dateComponents([.year, .month, .day], from: date)
+        return String(format: "%04d-%02d-%02d", c.year ?? 0, c.month ?? 1, c.day ?? 1)
+    }
+
+    /// Mitternacht des gespeicherten Tags im Kalender; `nil` bei ungültigem Text.
+    public func startOfDay(calendar: Calendar = .current) -> Date? {
+        let parts = date.split(separator: "-").compactMap { Int($0) }
+        guard parts.count == 3 else { return nil }
+        return calendar.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2]))
+    }
+
+    public enum Columns {
+        public static let id = Column(CodingKeys.id)
+        public static let date = Column(CodingKeys.date)
+        public static let kind = Column(CodingKeys.kind)
+        public static let note = Column(CodingKeys.note)
     }
 }
 

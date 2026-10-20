@@ -168,6 +168,20 @@ public enum Rounding: String, CaseIterable, Codable, Sendable {
 
 // MARK: - Bericht
 
+/// Zeit eines Projekts mit einem bestimmten Tag (bzw. ohne Tag), ungerundet.
+public struct TagReportRow: Hashable, Sendable {
+    /// `nil` = Einträge ohne Tag („ohne Tag“).
+    public var tag: String?
+    public var duration: TimeInterval
+    public var entryCount: Int
+
+    public init(tag: String?, duration: TimeInterval, entryCount: Int) {
+        self.tag = tag
+        self.duration = duration
+        self.entryCount = entryCount
+    }
+}
+
 /// Eine Zeile je Projekt mit Zeit im Zeitraum.
 public struct ProjectReportRow: Hashable, Sendable {
     public var project: Project
@@ -184,6 +198,8 @@ public struct ProjectReportRow: Hashable, Sendable {
     public var hourlyRate: Decimal?
     /// `roundedBillableDuration / 3600 × hourlyRate`, auf Cent gerundet; `nil` ohne Stundensatz.
     public var amount: Decimal?
+    /// Aufteilung nach Tag (Tags genau wie gespeichert, `nil` = ohne Tag), nach Dauer absteigend.
+    public var byTag: [TagReportRow]
 
     public init(
         project: Project,
@@ -193,7 +209,8 @@ public struct ProjectReportRow: Hashable, Sendable {
         billableDuration: TimeInterval,
         roundedBillableDuration: TimeInterval,
         hourlyRate: Decimal?,
-        amount: Decimal?
+        amount: Decimal?,
+        byTag: [TagReportRow] = []
     ) {
         self.project = project
         self.duration = duration
@@ -203,7 +220,31 @@ public struct ProjectReportRow: Hashable, Sendable {
         self.roundedBillableDuration = roundedBillableDuration
         self.hourlyRate = hourlyRate
         self.amount = amount
+        self.byTag = byTag
     }
+}
+
+/// Fortschritt zum Wochenziel (nur in Wochenberichten).
+public struct GoalProgress: Hashable, Sendable {
+    /// Wochenziel aus den Einstellungen (für eine volle Woche mit fünf Arbeitstagen).
+    public var target: TimeInterval
+    /// Abrechenbare Zeit der Woche, ungerundet.
+    public var achieved: TimeInterval
+    /// Ziel anteilig für die Arbeitstage der Woche: `target × workdays / 5`.
+    public var adjustedTarget: TimeInterval
+    /// `achieved / adjustedTarget`, nicht gedeckelt (über 1 = Ziel übertroffen). Ohne
+    /// Arbeitstage (`adjustedTarget == 0`) gilt das Ziel als erreicht: 1.
+    public var fraction: Double
+
+    public init(target: TimeInterval, achieved: TimeInterval, adjustedTarget: TimeInterval, fraction: Double) {
+        self.target = target
+        self.achieved = achieved
+        self.adjustedTarget = adjustedTarget
+        self.fraction = fraction
+    }
+
+    /// Noch fehlende Zeit bis zum angepassten Ziel, nie negativ.
+    public var remaining: TimeInterval { max(0, adjustedTarget - achieved) }
 }
 
 /// Zeit eines Kalendertags, aufgeteilt nach Projekt (ungerundet).
@@ -248,6 +289,14 @@ public struct Report: Hashable, Sendable {
     public var activeDays: Int
     /// `total / activeDays`, 0 ohne aktive Tage.
     public var averagePerActiveDay: TimeInterval
+    /// Als frei markierte Tage im Zeitraum, nach Datum.
+    public var daysOff: [DayOff]
+    /// Arbeitstage: Montag bis Freitag im Zeitraum, ohne freie Tage.
+    public var workdays: Int
+    /// `total / workdays`, 0 ohne Arbeitstage.
+    public var averagePerWorkday: TimeInterval
+    /// Wochenziel; nur bei `.week` und gesetztem Ziel, sonst `nil`.
+    public var goal: GoalProgress?
 
     public init(
         period: ReportPeriod,
@@ -263,7 +312,11 @@ public struct Report: Hashable, Sendable {
         days: [DayBucket],
         focus: FocusStats,
         activeDays: Int,
-        averagePerActiveDay: TimeInterval
+        averagePerActiveDay: TimeInterval,
+        daysOff: [DayOff] = [],
+        workdays: Int = 0,
+        averagePerWorkday: TimeInterval = 0,
+        goal: GoalProgress? = nil
     ) {
         self.period = period
         self.interval = interval
@@ -279,6 +332,10 @@ public struct Report: Hashable, Sendable {
         self.focus = focus
         self.activeDays = activeDays
         self.averagePerActiveDay = averagePerActiveDay
+        self.daysOff = daysOff
+        self.workdays = workdays
+        self.averagePerWorkday = averagePerWorkday
+        self.goal = goal
     }
 }
 
@@ -287,20 +344,24 @@ extension AppDatabase {
     /// - Parameters:
     ///   - rounding: Rundung je Eintrag (aufwärts) für `rounded…`-Werte und Beträge.
     ///   - defaultHourlyRate: Satz für Projekte ohne eigenen Stundensatz.
+    ///   - weeklyGoal: Wochenziel in Sekunden (`nil`/≤ 0 = keins); wirkt nur bei `.week`.
     public func report(
         for period: ReportPeriod,
         rounding: Rounding,
         defaultHourlyRate: Decimal? = nil,
+        weeklyGoal: TimeInterval? = nil,
         now: Date = .now,
         calendar: Calendar = .current
     ) throws -> Report {
         let interval = period.interval(calendar: calendar)
-        let (projects, entries) = try writer.read { db in
-            (try Project.fetchAll(db), try Self.entries(db, in: interval))
+        let (projects, entries, daysOff) = try writer.read { db in
+            (try Project.fetchAll(db), try Self.entries(db, in: interval),
+             try Self.daysOff(db, in: interval, calendar: calendar))
         }
         return Self.makeReport(
             period: period, interval: interval, projects: projects, entries: entries,
-            rounding: rounding, defaultHourlyRate: defaultHourlyRate, now: now, calendar: calendar
+            rounding: rounding, defaultHourlyRate: defaultHourlyRate, daysOff: daysOff,
+            weeklyGoal: weeklyGoal, now: now, calendar: calendar
         )
     }
 
@@ -312,6 +373,8 @@ extension AppDatabase {
         entries: [TimeEntry],
         rounding: Rounding,
         defaultHourlyRate: Decimal?,
+        daysOff: [DayOff] = [],
+        weeklyGoal: TimeInterval? = nil,
         now: Date,
         calendar: Calendar
     ) -> Report {
@@ -334,6 +397,7 @@ extension AppDatabase {
             var count = 0
             var billable: TimeInterval = 0
             var roundedBillable: TimeInterval = 0
+            var tags: [String?: (duration: TimeInterval, count: Int)] = [:]
         }
         var accumulators: [UUID: Accumulator] = [:]
         var business: TimeInterval = 0
@@ -352,6 +416,8 @@ extension AppDatabase {
             acc.duration += duration
             acc.rounded += rounded
             acc.count += 1
+            let tagPart = acc.tags[entry.tag, default: (0, 0)]
+            acc.tags[entry.tag] = (tagPart.duration + duration, tagPart.count + 1)
             if isBillable {
                 acc.billable += duration
                 acc.roundedBillable += rounded
@@ -381,7 +447,8 @@ extension AppDatabase {
                 billableDuration: acc.billable,
                 roundedBillableDuration: acc.roundedBillable,
                 hourlyRate: rate,
-                amount: rate.map { Money.amount(seconds: acc.roundedBillable, rate: $0) }
+                amount: rate.map { Money.amount(seconds: acc.roundedBillable, rate: $0) },
+                byTag: Self.tagRows(acc.tags)
             )
         }
         rows.sort { a, b in
@@ -393,6 +460,25 @@ extension AppDatabase {
         let days = zip(dayStarts, perDay).map { DayBucket(day: $0, perProject: $1) }
         let activeDays = days.filter { $0.total > 0 }.count
 
+        // Arbeitstage: Mo–Fr (Wochentag 2…6 im gregorianischen Sinn) ohne freie Tage.
+        let daysOffKeys = Set(daysOff.map(\.date))
+        let workdays = dayStarts.filter { day in
+            let weekday = calendar.component(.weekday, from: day)
+            return (2...6).contains(weekday) && !daysOffKeys.contains(DayOff.key(for: day, calendar: calendar))
+        }.count
+        let billable = rows.reduce(0) { $0 + $1.billableDuration }
+
+        var goal: GoalProgress?
+        if case .week = period, let target = weeklyGoal, target > 0 {
+            let adjusted = target * Double(workdays) / 5
+            goal = GoalProgress(
+                target: target,
+                achieved: billable,
+                adjustedTarget: adjusted,
+                fraction: adjusted > 0 ? billable / adjusted : 1
+            )
+        }
+
         return Report(
             period: period,
             interval: interval,
@@ -400,15 +486,32 @@ extension AppDatabase {
             roundedTotal: rows.reduce(0) { $0 + $1.roundedDuration },
             business: business,
             personal: personal,
-            billable: rows.reduce(0) { $0 + $1.billableDuration },
+            billable: billable,
             roundedBillable: rows.reduce(0) { $0 + $1.roundedBillableDuration },
             amount: rows.reduce(Decimal(0)) { $0 + ($1.amount ?? 0) },
             rows: rows,
             days: days,
             focus: focusStats(for: usedEntries, in: interval, now: now),
             activeDays: activeDays,
-            averagePerActiveDay: activeDays > 0 ? total / Double(activeDays) : 0
+            averagePerActiveDay: activeDays > 0 ? total / Double(activeDays) : 0,
+            daysOff: daysOff,
+            workdays: workdays,
+            averagePerWorkday: workdays > 0 ? total / Double(workdays) : 0,
+            goal: goal
         )
+    }
+
+    /// Tag-Zeilen nach Dauer absteigend; bei Gleichstand alphabetisch, „ohne Tag“ zuletzt.
+    private static func tagRows(_ tags: [String?: (duration: TimeInterval, count: Int)]) -> [TagReportRow] {
+        tags.map { TagReportRow(tag: $0.key, duration: $0.value.duration, entryCount: $0.value.count) }
+            .sorted { a, b in
+                if a.duration != b.duration { return a.duration > b.duration }
+                switch (a.tag, b.tag) {
+                case let (x?, y?): return x.localizedStandardCompare(y) == .orderedAscending
+                case (_?, nil): return true
+                default: return false
+                }
+            }
     }
 }
 

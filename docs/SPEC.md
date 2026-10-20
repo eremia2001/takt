@@ -357,3 +357,112 @@ Aussage; keine Sekunden; ruhig; Projektfarbe als einziger Akzent; Hell/Dunkel.
 - Entsättigte Schreibtisch-Darstellung (`widgetRenderingMode` `.vibrant`/`.accented`): Farbfläche wird
   zu Schlicht, Farbpunkte mit Ring, Budget- und Glyphentexte in `.primary`, Akzente `widgetAccentable`.
 - Alle Knöpfe mit Bedienungshilfe-Text („Wechseln zu …“, „Timer stoppen“, „Geplanten Block entfernen“ …).
+
+## Erfassung v3 (Tags, freie Tage, Wochenziel, Schnelleingabe)
+
+Datenbasis in `TaktCore`, App-Anbindung über `TaktStore`. Oberfläche folgt separat.
+
+### Datenmodell (Migration `v4`)
+
+| Feld/Tabelle | Typ | Bedeutung |
+|---|---|---|
+| `TimeEntry.tag` | `String?`, TEXT | eine freie Kennzeichnung je Eintrag („Meeting“, „Bugfix“, „Review“); `NULL` = ohne Tag |
+| `dayOff` | Tabelle | `id` (UUID), `date` (TEXT `YYYY-MM-DD`, **UNIQUE**), `kind` (`vacation`/`sick`/`holiday`/`other`), `note?` |
+| Index `timeEntry_tag` | `(tag, projectId, startedAt) WHERE tag IS NOT NULL` | für die Tag-Vorschläge |
+
+- **Tag-Normalisierung** (`TimeEntry.normalizedTag`): getrimmt, führende `#` entfernt, höchstens
+  40 Zeichen (gekürzt, nicht abgelehnt), leer → `nil`. Gilt in `addEntry`, `updateEntry`, `startTimer`.
+- **Freier Tag** = Kalendertag als Text, damit Zeitzone/Sommerzeit keine Rolle spielen
+  (`DayOff.key(for:calendar:)`, `startOfDay(calendar:)`). `DayOffKind.title`: Urlaub, Krank, Feiertag,
+  Sonstiges; unbekannte Rohwerte werden beim Lesen zu `.other`.
+- Migration löscht nichts; geprüft mit echter v3-Datenbank (Test + Sicherung `takt.sqlite.bak-v3`).
+
+### Repository
+
+- `tagSuggestions(projectId:prefix:limit: = 8)`: zuerst Tags des Projekts, dann alle übrigen, jeweils
+  nach letzter Nutzung (`MAX(startedAt)`); Präfix ohne Rücksicht auf Groß-/Kleinschreibung und Akzente
+  (führendes `#` ignoriert); Dubletten auch in anderer Schreibweise entfernt (die jüngste gewinnt).
+- `daysOff(in:calendar:)`, `dayOff(date:calendar:)`, `setDayOff(date:kind:note:calendar:)` (ersetzt
+  den Eintrag des Tages, ID bleibt), `removeDayOff(date:calendar:)`, `isDayOff(date:calendar:)`.
+- `startTimer(projectId:tag:now:)`: Überladung mit Tag. Läuft das Projekt schon, bekommt der laufende
+  Eintrag den Tag (nur wenn einer angegeben ist). `startTimer(projectId:now:)` bleibt unverändert.
+- `stopTimer(at:nextStep:)`: Stopp mit ausdrücklichem Ende („Leerlauf abziehen“); `end < startedAt`
+  → Ende = Start. `stopTimer(nextStep:now:)` ruft es mit `now` auf.
+- **Notiz beim Stoppen:** ein leerer `nextStep` lässt eine schon am laufenden Eintrag stehende Notiz
+  (z. B. aus der Schnelleingabe) stehen, statt sie zu löschen.
+- `discardRunning()`: löscht den laufenden Eintrag ersatzlos (abgebrochene Pomodoro-Einheit).
+
+### Berichte
+
+- `ProjectReportRow.byTag: [TagReportRow]` (`tag` – `nil` = ohne Tag –, `duration` ungerundet,
+  `entryCount`), nach Dauer absteigend, bei Gleichstand alphabetisch, „ohne Tag“ zuletzt. Tags werden
+  genau wie gespeichert gruppiert.
+- `Report.daysOff` (freie Tage im Zeitraum), `Report.workdays` = Montag–Freitag im Zeitraum ohne freie
+  Tage (ein freier Samstag zählt nicht doppelt), `averagePerWorkday = total / workdays` (0 ohne).
+  `activeDays`/`averagePerActiveDay` bleiben.
+- `Report.goal: GoalProgress?` nur bei `.week` und Ziel > 0: `target`, `achieved` (abrechenbare,
+  ungerundete Zeit), `adjustedTarget = target × workdays / 5`, `fraction = achieved / adjustedTarget`
+  (ungedeckelt; ohne Arbeitstage 1), `remaining`. Ziel über
+  `report(for:rounding:defaultHourlyRate:weeklyGoal:now:calendar:)`; `TaktStore.report` liest es
+  standardmäßig aus den Einstellungen.
+
+### Schnelleingabe (`QuickEntryParser`)
+
+`parse(_:projects:now:calendar:) -> Result<QuickEntry, QuickEntryError>`, tolerant und deutsch:
+`[Tag] <Projekt> [Tag] [Zeit] [Tag] [#Tag] [Notiz…]`, das Projekt darf auch hinter der Zeit stehen.
+
+| Eingabe | Ergebnis |
+|---|---|
+| `Kundenportal 9:00-10:30 Review` | heute 09:00–10:30, Notiz „Review“ |
+| `kunden 9-10:30 #meeting Standup` | Kundenportal, Tag „meeting“, Notiz „Standup“ |
+| `Garten 14:00 bis 15:15`, `von 8 bis 9:45 Uhr`, `9.30 - 11 Uhr`, `9–11` | Spanne |
+| `Steuer gestern 20:00-21:00`, `Mo 9-11 Kundenportal`, `19.10. 9-10 Garten` | anderer Tag |
+| `Website 1h30`, `45m`, `90min`, `1,5h`, `1:30h`, `2 Std`, `1h 15m` | Dauer, Ende = jetzt |
+| `Website` | Timer-Start jetzt (`isRunningStart`) |
+| `Website seit 9:30`, `Website 9:30`, `ab 9`, `9 Uhr` | Timer-Start rückwirkend |
+
+- **Projekt:** längster passender Wortanfang, der Rest wird Notiz. Trefferstufen: gleich > Namensanfang
+  > Wortanfang > Teilwort > ein Tippfehler > Buchstabenfolge (die letzten beiden nur für ein Wort);
+  Groß-/Kleinschreibung und Akzente egal. Zwei gleich gute → `.ambiguousProject`, keiner →
+  `.unknownProject`.
+- **Tage:** `heute`, `gestern`, `vorgestern`, Wochentage (`Mo`/`Montag` … = letzter solcher Tag,
+  **heute eingeschlossen**), `19.10.`/`19.10.2026` (ohne Jahr nie in der Zukunft); am Anfang oder direkt
+  vor/nach der Zeit. Ein Wort, das nur ein Tag sein könnte und sonst nichts übrig ließe, gilt als Projekt.
+- **Über Mitternacht:** Ende ≤ Start → nächster Tag, wenn die Spanne dann < 12 h ist, sonst
+  `.invalidTimeRange`. Ohne ausdrücklichen Tag und Ende nach „jetzt“ ist die letzte Nacht gemeint
+  (`23-1` um 18 Uhr = gestern 23:00 bis heute 01:00).
+- Zahlen ohne Doppelpunkt (`1.20`) sind nur in Spannen oder mit `Uhr`/`ab`/`seit`/`um` Uhrzeiten.
+- Fehler: `.empty`, `.missingProject`, `.missingTime` (anderer Tag ohne Start und Ende),
+  `.startInFuture` (bloßer Start nach jetzt), alle mit deutschem `errorDescription`.
+- **Übernehmen** (`TaktStore.commit`): fertiger Eintrag → `addEntry` (Notiz als „Nächster Schritt“,
+  Tag); Timer-Start → `startTimer(projectId:tag:now:)`, rückwirkend, wenn der Start mehr als eine
+  Minute zurückliegt (ein laufender anderer Timer endet dann zu diesem Start); die Notiz wird am
+  laufenden Eintrag gespeichert und beim Stoppen ohne Notiz beibehalten.
+
+### Einstellungen
+
+- `SharedSettings.weeklyGoalHours: Double?` (Schlüssel `weeklyGoalHours`, gültig 0 < h ≤ 168, sonst
+  `nil`), `weeklyGoal(in:)` in Sekunden – für ein späteres Widget.
+- `AppSettings.weeklyGoalHours` spiegelt bei jeder Änderung und beim Start dorthin und lädt die
+  Widget-Timelines neu; `AppSettings.weeklyGoal` liefert Sekunden.
+
+## Fokus v2 (Leerlauf, Pomodoro) – Einstellungen
+
+Nur die Einstellungen und die Datenbasis; die Logik (Leerlauf-Erkennung, Pomodoro-Ablauf) folgt in
+`Takt/Focus/`.
+
+| `AppSettings` | Standard | Bereich | Bedeutung |
+|---|---|---|---|
+| `idleDetectionEnabled` | an | | bei laufendem Timer nach Leerlauf fragen |
+| `idleMinutes` | 10 | 1–120 | Minuten ohne Eingabe bis Leerlauf |
+| `pomodoroEnabled` | aus | | Pomodoro-Modus |
+| `pomodoroWorkMinutes` | 50 | 5–180 | Arbeitseinheit |
+| `pomodoroBreakMinutes` | 10 | 1–60 | kurze Pause |
+| `pomodoroLongBreakMinutes` | 20 | 1–120 | lange Pause |
+| `pomodoroCyclesBeforeLongBreak` | 4 | 1–12 | Einheiten bis zur langen Pause |
+| `pomodoroAutoStopTimer` | an | | Timer am Ende einer Einheit stoppen |
+
+Werte außerhalb des Bereichs (z. B. per `defaults write`) fallen beim Start auf den Standard zurück.
+
+Bausteine im Store: `stop(at:nextStep:)` für „Leerlauf abziehen“ (Ende = Beginn des Leerlaufs),
+`discardRunning()` für eine abgebrochene Einheit, `start(projectId:tag:)`.

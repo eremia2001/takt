@@ -52,6 +52,62 @@ final class AppSettings {
     /// Bei der Pausenerinnerung Musik pausieren.
     var breakPausesMusic: Bool { didSet { defaults.set(breakPausesMusic, forKey: Key.breakPausesMusic) } }
 
+    // MARK: Leerlauf & Pomodoro (Fokus v2)
+
+    /// Leerlauf-Erkennung: nach `idleMinutes` ohne Eingabe bei laufendem Timer nachfragen.
+    var idleDetectionEnabled: Bool {
+        didSet { defaults.set(idleDetectionEnabled, forKey: Key.idleDetectionEnabled) }
+    }
+    /// Minuten ohne Tastatur/Maus, ab denen Leerlauf gilt (1–120, Standard 10).
+    var idleMinutes: Int { didSet { defaults.set(idleMinutes, forKey: Key.idleMinutes) } }
+    /// Pomodoro-Modus eingeschaltet.
+    var pomodoroEnabled: Bool { didSet { defaults.set(pomodoroEnabled, forKey: Key.pomodoroEnabled) } }
+    /// Länge einer Arbeitseinheit in Minuten (5–180, Standard 50).
+    var pomodoroWorkMinutes: Int {
+        didSet { defaults.set(pomodoroWorkMinutes, forKey: Key.pomodoroWorkMinutes) }
+    }
+    /// Kurze Pause in Minuten (1–60, Standard 10).
+    var pomodoroBreakMinutes: Int {
+        didSet { defaults.set(pomodoroBreakMinutes, forKey: Key.pomodoroBreakMinutes) }
+    }
+    /// Lange Pause in Minuten (1–120, Standard 20).
+    var pomodoroLongBreakMinutes: Int {
+        didSet { defaults.set(pomodoroLongBreakMinutes, forKey: Key.pomodoroLongBreakMinutes) }
+    }
+    /// Arbeitseinheiten bis zur langen Pause (1–12, Standard 4).
+    var pomodoroCyclesBeforeLongBreak: Int {
+        didSet { defaults.set(pomodoroCyclesBeforeLongBreak, forKey: Key.pomodoroCyclesBeforeLongBreak) }
+    }
+    /// Am Ende einer Arbeitseinheit den Timer stoppen (Pause wird nicht erfasst).
+    var pomodoroAutoStopTimer: Bool {
+        didSet { defaults.set(pomodoroAutoStopTimer, forKey: Key.pomodoroAutoStopTimer) }
+    }
+
+    // MARK: Wochenziel
+
+    /// Wochenziel in Stunden (für fünf Arbeitstage; freie Tage verringern es anteilig);
+    /// `nil` = kein Ziel. Wird in die App-Group-Suite gespiegelt (`SharedSettings`), damit das
+    /// Widget es später anzeigen kann.
+    var weeklyGoalHours: Double? {
+        didSet {
+            let valid = weeklyGoalHours.flatMap(SharedSettings.validWeeklyGoalHours)
+            if let valid {
+                defaults.set(valid, forKey: Key.weeklyGoalHours)
+            } else {
+                defaults.removeObject(forKey: Key.weeklyGoalHours)
+            }
+            SharedSettings.weeklyGoalHours = valid
+            if valid != oldValue.flatMap(SharedSettings.validWeeklyGoalHours) {
+                WidgetCenter.shared.reloadAllTimelines()
+            }
+        }
+    }
+
+    /// Wochenziel in Sekunden für Berichte, `nil` ohne (gültiges) Ziel.
+    var weeklyGoal: TimeInterval? {
+        weeklyGoalHours.flatMap(SharedSettings.validWeeklyGoalHours).map { $0 * 3600 }
+    }
+
     // MARK: Timer
 
     /// Grenze in Stunden, ab der bei einem laufenden Timer nachgefragt wird (Logik folgt später).
@@ -143,6 +199,15 @@ final class AppSettings {
         static let globalShortcutEnabled = "settings.globalShortcutEnabled"
         static let globalShortcutKeyCode = "settings.globalShortcutKeyCode"
         static let globalShortcutModifiers = "settings.globalShortcutModifiers"
+        static let idleDetectionEnabled = "settings.idleDetectionEnabled"
+        static let idleMinutes = "settings.idleMinutes"
+        static let pomodoroEnabled = "settings.pomodoroEnabled"
+        static let pomodoroWorkMinutes = "settings.pomodoroWorkMinutes"
+        static let pomodoroBreakMinutes = "settings.pomodoroBreakMinutes"
+        static let pomodoroLongBreakMinutes = "settings.pomodoroLongBreakMinutes"
+        static let pomodoroCyclesBeforeLongBreak = "settings.pomodoroCyclesBeforeLongBreak"
+        static let pomodoroAutoStopTimer = "settings.pomodoroAutoStopTimer"
+        static let weeklyGoalHours = "settings.weeklyGoalHours"
     }
 
     /// Standard-Kurzbefehl: ⌃⌥⌘T.
@@ -171,6 +236,14 @@ final class AppSettings {
             Key.globalShortcutEnabled: true,
             Key.globalShortcutKeyCode: Self.defaultShortcutKeyCode,
             Key.globalShortcutModifiers: Self.defaultShortcutModifiers,
+            Key.idleDetectionEnabled: true,
+            Key.idleMinutes: 10,
+            Key.pomodoroEnabled: false,
+            Key.pomodoroWorkMinutes: 50,
+            Key.pomodoroBreakMinutes: 10,
+            Key.pomodoroLongBreakMinutes: 20,
+            Key.pomodoroCyclesBeforeLongBreak: 4,
+            Key.pomodoroAutoStopTimer: true,
         ])
 
         musicEnabled = defaults.bool(forKey: Key.musicEnabled)
@@ -198,9 +271,21 @@ final class AppSettings {
         let storedModifiers = (defaults.object(forKey: Key.globalShortcutModifiers) as? NSNumber)?.uintValue
         globalShortcutModifiers = (storedModifiers ?? 0) == 0 ? Self.defaultShortcutModifiers : storedModifiers!
 
-        // `didSet` greift in `init` nicht: Pausenerinnerung einmal beim Start für das Widget spiegeln.
+        idleDetectionEnabled = defaults.bool(forKey: Key.idleDetectionEnabled)
+        idleMinutes = Self.clamp(defaults.integer(forKey: Key.idleMinutes), 1...120, fallback: 10)
+        pomodoroEnabled = defaults.bool(forKey: Key.pomodoroEnabled)
+        pomodoroWorkMinutes = Self.clamp(defaults.integer(forKey: Key.pomodoroWorkMinutes), 5...180, fallback: 50)
+        pomodoroBreakMinutes = Self.clamp(defaults.integer(forKey: Key.pomodoroBreakMinutes), 1...60, fallback: 10)
+        pomodoroLongBreakMinutes = Self.clamp(defaults.integer(forKey: Key.pomodoroLongBreakMinutes), 1...120, fallback: 20)
+        pomodoroCyclesBeforeLongBreak = Self.clamp(defaults.integer(forKey: Key.pomodoroCyclesBeforeLongBreak), 1...12, fallback: 4)
+        pomodoroAutoStopTimer = defaults.bool(forKey: Key.pomodoroAutoStopTimer)
+        weeklyGoalHours = (defaults.object(forKey: Key.weeklyGoalHours) as? NSNumber)
+            .flatMap { SharedSettings.validWeeklyGoalHours($0.doubleValue) }
+
+        // `didSet` greift in `init` nicht: Pausenerinnerung und Wochenziel einmal beim Start für das Widget spiegeln.
         SharedSettings.breakReminderEnabled = breakReminderEnabled
         SharedSettings.breakReminderMinutes = breakReminderMinutes
+        SharedSettings.weeklyGoalHours = weeklyGoalHours
     }
 
     /// Großgeschriebener Code, wenn `text` aus genau drei Buchstaben A–Z besteht, sonst `nil`.

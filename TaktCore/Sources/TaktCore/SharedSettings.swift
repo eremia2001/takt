@@ -36,6 +36,8 @@ public enum SharedSettings {
     /// Schlüssel der Pausenerinnerung (Spiegel von `AppSettings`).
     public static let breakReminderEnabledKey = "breakReminderEnabled"
     public static let breakReminderMinutesKey = "breakReminderMinutes"
+    /// Schlüssel des Wochenziels in Stunden (Spiegel von `AppSettings`).
+    public static let weeklyGoalHoursKey = "weeklyGoalHours"
 
     /// Standarddauer bis zur Pausenerinnerung in Minuten.
     public static let defaultBreakReminderMinutes = 75
@@ -100,5 +102,38 @@ public enum SharedSettings {
     /// Minuten bis zur Pausenerinnerung, `nil` wenn sie ausgeschaltet ist (für `WidgetSnapshot`).
     public static func breakReminderMinutesIfEnabled(in defaults: UserDefaults) -> Int? {
         breakReminderEnabled(in: defaults) ? breakReminderMinutes(in: defaults) : nil
+    }
+
+    // MARK: Wochenziel
+
+    /// Wochenziel in Stunden (für eine volle Woche mit fünf Arbeitstagen); `nil` = kein Ziel.
+    public static var weeklyGoalHours: Double? {
+        get { weeklyGoalHours(in: defaults) }
+        set { setWeeklyGoalHours(newValue, in: defaults) }
+    }
+
+    /// Fehlende oder unsinnige Werte (≤ 0, über 168 h, nicht endlich) ergeben `nil`.
+    public static func weeklyGoalHours(in defaults: UserDefaults) -> Double? {
+        guard let value = (defaults.object(forKey: weeklyGoalHoursKey) as? NSNumber)?.doubleValue else { return nil }
+        return validWeeklyGoalHours(value)
+    }
+
+    /// Schreibt das Ziel; `nil` (oder ein unsinniger Wert) entfernt es.
+    public static func setWeeklyGoalHours(_ hours: Double?, in defaults: UserDefaults) {
+        if let hours = hours.flatMap(validWeeklyGoalHours) {
+            defaults.set(hours, forKey: weeklyGoalHoursKey)
+        } else {
+            defaults.removeObject(forKey: weeklyGoalHoursKey)
+        }
+    }
+
+    /// Wochenziel in Sekunden für `report(…weeklyGoal:…)`, `nil` ohne Ziel.
+    public static func weeklyGoal(in defaults: UserDefaults) -> TimeInterval? {
+        weeklyGoalHours(in: defaults).map { $0 * 3600 }
+    }
+
+    /// `hours`, falls 0 < hours ≤ 168 (eine Woche), sonst `nil`.
+    public static func validWeeklyGoalHours(_ hours: Double) -> Double? {
+        hours.isFinite && hours > 0 && hours <= 168 ? hours : nil
     }
 }

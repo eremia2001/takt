@@ -74,7 +74,7 @@ struct MigrationTests {
             let projectColumns = Set(try db.columns(in: "project").map(\.name))
             #expect(projectColumns.isSuperset(of: ["hourlyRate", "isBillable", "client", "musicSource", "playlistURI"]))
             #expect(try db.columns(in: "timeEntry").map(\.name).contains("isBillable"))
-            #expect(try AppDatabase.migrator.appliedIdentifiers(db) == ["v1", "v2", "v3"])
+            #expect(try AppDatabase.migrator.appliedIdentifiers(db) == ["v1", "v2", "v3", "v4"])
         }
     }
 

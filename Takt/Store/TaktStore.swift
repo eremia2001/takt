@@ -224,9 +224,100 @@ final class TaktStore {
         write { try $0.startTimer(projectId: projectId) }
     }
 
+    /// Startet das Projekt mit Tag (läuft es schon, bekommt der laufende Eintrag den Tag).
+    @discardableResult
+    func start(projectId: UUID, tag: String?) -> Bool {
+        write { try $0.startTimer(projectId: projectId, tag: tag) }
+    }
+
     @discardableResult
     func stop(nextStep: String?) -> Bool {
         write { try $0.stopTimer(nextStep: nextStep) }
+    }
+
+    /// Stoppt mit ausdrücklichem Ende, z. B. „Leerlauf abziehen“ (Ende = Beginn des Leerlaufs).
+    @discardableResult
+    func stop(at end: Date, nextStep: String?) -> Bool {
+        write { try $0.stopTimer(at: end, nextStep: nextStep) }
+    }
+
+    /// Verwirft den laufenden Eintrag ganz (z. B. abgebrochene Pomodoro-Einheit).
+    @discardableResult
+    func discardRunning() -> Bool {
+        write { try $0.discardRunning() }
+    }
+
+    // MARK: Tags
+
+    /// Tag-Vorschläge (zuerst des Projekts, dann alle, zuletzt genutzte zuerst); bei Fehlern leer.
+    func tagSuggestions(projectId: UUID?, prefix: String, limit: Int = 8) -> [String] {
+        (try? database?.tagSuggestions(projectId: projectId, prefix: prefix, limit: limit)) ?? []
+    }
+
+    // MARK: Freie Tage
+
+    /// Freie Tage im Intervall (nach Datum); bei Fehlern leer (Meldung in `lastError`).
+    func daysOff(in interval: DateInterval) -> [DayOff] {
+        guard let database else { return [] }
+        do {
+            return try database.daysOff(in: interval)
+        } catch {
+            lastError = Self.message(for: error)
+            return []
+        }
+    }
+
+    /// Markiert den Kalendertag von `date` als frei (ersetzt eine vorhandene Markierung).
+    @discardableResult
+    func setDayOff(date: Date, kind: DayOffKind, note: String? = nil) -> Bool {
+        write { try $0.setDayOff(date: date, kind: kind, note: note) }
+    }
+
+    @discardableResult
+    func removeDayOff(date: Date) -> Bool {
+        write { try $0.removeDayOff(date: date) }
+    }
+
+    func isDayOff(date: Date) -> Bool {
+        (try? database?.isDayOff(date: date)) ?? false
+    }
+
+    // MARK: Schnelleingabe
+
+    /// Liest eine Schnelleingabe gegen die aktiven Projekte, z. B. „kunden 9-10:30 #meeting Standup“.
+    func quickEntry(_ text: String, now: Date = .now) -> Result<QuickEntry, QuickEntryError> {
+        QuickEntryParser.parse(text, projects: projects, now: now)
+    }
+
+    /// Übernimmt eine Schnelleingabe: fertiger Eintrag wird angelegt, ein Timer-Start startet das
+    /// Projekt mit Tag (ein laufender Timer eines anderen Projekts endet zum Start). Liegt der
+    /// Start mehr als eine Minute zurück („seit 9:30“), beginnt der Timer rückwirkend.
+    /// Die Notiz landet als „Nächster Schritt“ im Eintrag.
+    @discardableResult
+    func commit(_ quick: QuickEntry) -> Bool {
+        guard let projectId = quick.projectId else {
+            lastError = QuickEntryError.missingProject.errorDescription
+            return false
+        }
+        if quick.isRunningStart {
+            let now = Date.now
+            let start = quick.start < now.addingTimeInterval(-60) ? quick.start : now
+            return write { database in
+                var running = try database.startTimer(projectId: projectId, tag: quick.tag, now: start)
+                if let note = quick.note, running.nextStep == nil {
+                    running.nextStep = note
+                    try database.updateEntry(running)
+                }
+            }
+        }
+        let entry = TimeEntry(
+            projectId: projectId,
+            startedAt: quick.start,
+            endedAt: quick.end ?? .now,
+            nextStep: quick.note,
+            tag: quick.tag
+        )
+        return write { try $0.addEntry(entry) }
     }
 
     // MARK: Geplanter Block
@@ -299,10 +390,21 @@ final class TaktStore {
     // MARK: Berichte & Import
 
     /// Bericht für einen Zeitraum; bei Fehlern `nil` (Meldung in `lastError`).
-    func report(for period: ReportPeriod, rounding: Rounding, defaultHourlyRate: Decimal?, now: Date = .now) -> Report? {
+    /// `weeklyGoal` (Sekunden) kommt standardmäßig aus den Einstellungen (über `SharedSettings`
+    /// gespiegelt); `nil` = kein Ziel.
+    func report(
+        for period: ReportPeriod,
+        rounding: Rounding,
+        defaultHourlyRate: Decimal?,
+        weeklyGoal: TimeInterval? = TaktStore.settingsWeeklyGoal,
+        now: Date = .now
+    ) -> Report? {
         guard let database else { return nil }
         do {
-            return try database.report(for: period, rounding: rounding, defaultHourlyRate: defaultHourlyRate, now: now)
+            return try database.report(
+                for: period, rounding: rounding, defaultHourlyRate: defaultHourlyRate,
+                weeklyGoal: weeklyGoal, now: now
+            )
         } catch {
             lastError = Self.message(for: error)
             return nil
@@ -335,6 +437,12 @@ final class TaktStore {
     }
 
     // MARK: Hilfen
+
+    /// Wochenziel aus den Einstellungen in Sekunden (`AppSettings.weeklyGoalHours`, gespiegelt
+    /// nach `SharedSettings`); `nil` ohne Ziel.
+    nonisolated static var settingsWeeklyGoal: TimeInterval? {
+        SharedSettings.weeklyGoal(in: SharedSettings.defaults)
+    }
 
     /// Führt eine Schreiboperation aus; Fehler landen in `lastError`, nie ein Absturz.
     /// Danach: neu laden, andere Prozesse benachrichtigen, Widget-Timelines neu laden.

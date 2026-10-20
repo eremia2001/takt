@@ -81,30 +81,65 @@ extension AppDatabase {
     /// und der laufende Eintrag wird zurückgegeben.
     @discardableResult
     public func startTimer(projectId: UUID, now: Date = .now) throws -> TimeEntry {
-        try writer.write { db in
+        try startTimer(projectId: projectId, tag: nil, now: now)
+    }
+
+    /// Wie `startTimer(projectId:now:)`, zusätzlich mit Tag für den neuen Eintrag (normalisiert,
+    /// siehe `TimeEntry.normalizedTag`). Läuft das Projekt bereits, bekommt der laufende Eintrag
+    /// den Tag – sofern einer angegeben ist; `nil` lässt einen vorhandenen Tag stehen.
+    @discardableResult
+    public func startTimer(projectId: UUID, tag: String?, now: Date = .now) throws -> TimeEntry {
+        let tag = TimeEntry.normalizedTag(tag)
+        return try writer.write { db in
             guard try Project.exists(db, id: projectId) else { throw TaktError.projectNotFound }
             // Ein fälliger geplanter Block dieses Projekts ist mit dem Start erledigt.
             try Self.deleteDuePlannedBlocks(db, projectId: projectId, now: now)
             if var running = try Self.activeEntry(db) {
-                if running.projectId == projectId { return running }
+                if running.projectId == projectId {
+                    if let tag, running.tag != tag {
+                        running.tag = tag
+                        try running.update(db)
+                    }
+                    return running
+                }
                 running.endedAt = max(now, running.startedAt)
                 try running.update(db)
             }
-            let entry = TimeEntry(projectId: projectId, startedAt: now)
+            let entry = TimeEntry(projectId: projectId, startedAt: now, tag: tag)
             try entry.insert(db)
             return entry
         }
     }
 
-    /// Beendet den laufenden Timer. `nextStep` wird getrimmt; leer bzw. nur Leerraum wird zu `nil`.
+    /// Beendet den laufenden Timer. `nextStep` wird getrimmt; leer bzw. nur Leerraum lässt eine
+    /// schon am laufenden Eintrag stehende Notiz (z. B. aus der Schnelleingabe) unverändert.
     /// Gibt `nil` zurück, wenn nichts lief.
     @discardableResult
     public func stopTimer(nextStep: String? = nil, now: Date = .now) throws -> TimeEntry? {
+        try stopTimer(at: now, nextStep: nextStep)
+    }
+
+    /// Beendet den laufenden Timer mit ausdrücklichem Ende, z. B. „Leerlauf abziehen“ (Ende =
+    /// Beginn des Leerlaufs). Liegt `end` vor dem Start, endet der Eintrag bei seinem Start
+    /// (Dauer 0). `nextStep` wie bei `stopTimer(nextStep:now:)`. Gibt `nil` zurück, wenn nichts lief.
+    @discardableResult
+    public func stopTimer(at end: Date, nextStep: String?) throws -> TimeEntry? {
         try writer.write { db in
             guard var running = try Self.activeEntry(db) else { return nil }
-            running.endedAt = max(now, running.startedAt)
-            running.nextStep = Self.normalizedNote(nextStep)
+            running.endedAt = max(end, running.startedAt)
+            running.nextStep = Self.normalizedNote(nextStep) ?? running.nextStep
             try running.update(db)
+            return running
+        }
+    }
+
+    /// Löscht den laufenden Eintrag ersatzlos (z. B. abgebrochene Pomodoro-Einheit).
+    /// Gibt den gelöschten Eintrag zurück, `nil` wenn nichts lief.
+    @discardableResult
+    public func discardRunning() throws -> TimeEntry? {
+        try writer.write { db in
+            guard let running = try Self.activeEntry(db) else { return nil }
+            try running.delete(db)
             return running
         }
     }
@@ -176,24 +211,105 @@ extension AppDatabase {
         try writer.read { db in try Self.entries(db, in: interval) }
     }
 
-    /// Legt einen Eintrag manuell an.
+    /// Legt einen Eintrag manuell an. Der Tag wird normalisiert (`TimeEntry.normalizedTag`).
     /// - Throws: `TaktError.endBeforeStart`, `.timerAlreadyRunning` (Eintrag ohne Ende, obwohl
     ///   schon einer läuft), `.projectNotFound`.
     public func addEntry(_ entry: TimeEntry) throws {
+        var entry = entry
+        entry.tag = TimeEntry.normalizedTag(entry.tag)
         try writer.write { db in
             try Self.validate(entry, db)
             try entry.insert(db)
         }
     }
 
-    /// Aktualisiert einen bestehenden Eintrag (Validierung wie bei `addEntry`).
+    /// Aktualisiert einen bestehenden Eintrag (Validierung und Tag wie bei `addEntry`).
     /// - Throws: zusätzlich `TaktError.entryNotFound`.
     public func updateEntry(_ entry: TimeEntry) throws {
+        var entry = entry
+        entry.tag = TimeEntry.normalizedTag(entry.tag)
         try writer.write { db in
             guard try TimeEntry.exists(db, id: entry.id) else { throw TaktError.entryNotFound }
             try Self.validate(entry, db)
             try entry.update(db)
         }
+    }
+
+    // MARK: Tags
+
+    /// Vorschläge für ein Tag-Feld: zuletzt verwendete Tags (nach letzter Nutzung), zuerst die des
+    /// Projekts, danach die übrigen. Gefiltert nach Präfix (Groß-/Kleinschreibung und Akzente egal,
+    /// führendes `#` wird ignoriert), ohne Dubletten (auch nicht in anderer Schreibweise – es
+    /// gewinnt die zuletzt verwendete).
+    public func tagSuggestions(projectId: UUID?, prefix: String, limit: Int = 8) throws -> [String] {
+        guard limit > 0 else { return [] }
+        let rows = try writer.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT tag, COALESCE(projectId = ?, 0) AS inProject, MAX(startedAt) AS lastUsed
+                FROM timeEntry
+                WHERE tag IS NOT NULL
+                GROUP BY tag, inProject
+                ORDER BY inProject DESC, lastUsed DESC
+                """, arguments: [projectId])
+        }
+        let needle = Self.foldedForSearch(TimeEntry.normalizedTag(prefix) ?? "")
+        var seen = Set<String>()
+        var result: [String] = []
+        for row in rows {
+            let tag: String = row["tag"]
+            let folded = Self.foldedForSearch(tag)
+            guard folded.hasPrefix(needle), seen.insert(folded).inserted else { continue }
+            result.append(tag)
+            if result.count == limit { break }
+        }
+        return result
+    }
+
+    // MARK: Freie Tage
+
+    /// Freie Tage, deren Kalendertag sich mit dem Intervall überschneidet (Ende exklusiv), nach Datum.
+    public func daysOff(in interval: DateInterval, calendar: Calendar = .current) throws -> [DayOff] {
+        try writer.read { db in try Self.daysOff(db, in: interval, calendar: calendar) }
+    }
+
+    /// Der freie Tag am Kalendertag von `date`, falls vorhanden.
+    public func dayOff(date: Date, calendar: Calendar = .current) throws -> DayOff? {
+        let key = DayOff.key(for: date, calendar: calendar)
+        return try writer.read { db in
+            try DayOff.filter(DayOff.Columns.date == key).fetchOne(db)
+        }
+    }
+
+    /// Markiert den Kalendertag von `date` als frei und ersetzt dabei einen vorhandenen Eintrag
+    /// desselben Tags (dessen ID bleibt erhalten). `note` wird getrimmt; leer wird zu `nil`.
+    @discardableResult
+    public func setDayOff(date: Date, kind: DayOffKind, note: String? = nil, calendar: Calendar = .current) throws -> DayOff {
+        let key = DayOff.key(for: date, calendar: calendar)
+        let note = Self.normalizedNote(note)
+        return try writer.write { db in
+            if var existing = try DayOff.filter(DayOff.Columns.date == key).fetchOne(db) {
+                existing.kind = kind
+                existing.note = note
+                try existing.update(db)
+                return existing
+            }
+            let dayOff = DayOff(date: key, kind: kind, note: note)
+            try dayOff.insert(db)
+            return dayOff
+        }
+    }
+
+    /// Entfernt die Markierung des Kalendertags von `date`; ohne Markierung passiert nichts.
+    public func removeDayOff(date: Date, calendar: Calendar = .current) throws {
+        let key = DayOff.key(for: date, calendar: calendar)
+        try writer.write { db in
+            _ = try DayOff.filter(DayOff.Columns.date == key).deleteAll(db)
+        }
+    }
+
+    /// Ist der Kalendertag von `date` als frei markiert?
+    public func isDayOff(date: Date, calendar: Calendar = .current) throws -> Bool {
+        try dayOff(date: date, calendar: calendar) != nil
     }
 
     /// Löscht den Eintrag; ein unbekannter Eintrag wird ignoriert.
@@ -323,6 +439,22 @@ extension AppDatabase {
             longestBlock = max(longestBlock, current.end.timeIntervalSince(current.start))
         }
         return FocusStats(switches: switches, longestBlock: longestBlock)
+    }
+
+    static func daysOff(_ db: Database, in interval: DateInterval, calendar: Calendar) throws -> [DayOff] {
+        guard interval.end > interval.start else { return [] }
+        // Letzter enthaltener Tag: Ende exklusiv, deshalb knapp davor.
+        let first = DayOff.key(for: interval.start, calendar: calendar)
+        let last = DayOff.key(for: interval.end.addingTimeInterval(-0.001), calendar: calendar)
+        return try DayOff
+            .filter(DayOff.Columns.date >= first && DayOff.Columns.date <= last)
+            .order(DayOff.Columns.date)
+            .fetchAll(db)
+    }
+
+    /// Für Präfixvergleiche: klein, ohne Akzente (`Café` → `cafe`).
+    static func foldedForSearch(_ text: String) -> String {
+        text.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "de_DE"))
     }
 
     static func validate(_ entry: TimeEntry, _ db: Database) throws {

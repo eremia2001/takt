@@ -67,7 +67,7 @@ public final class AppDatabase: Sendable {
     }
 
     /// Alle Migrationen. `internal`, damit Tests ältere Stände aufbauen können
-    /// (`migrator.migrate(writer, upTo: "v1")` bzw. `"v2"`).
+    /// (`migrator.migrate(writer, upTo: "v1")`, `"v2"`, `"v3"`).
     static var migrator: DatabaseMigrator {
         // Bewusst ohne `eraseDatabaseOnSchemaChange`: echte Zeitdaten nie automatisch löschen.
         var migrator = DatabaseMigrator()
@@ -139,6 +139,26 @@ public final class AppDatabase: Sendable {
                 t.column("startAt", .double).notNull().indexed()  // Sekunden seit 2001
                 t.column("note", .text)
                 t.column("createdAt", .double).notNull()
+            }
+        }
+
+        // v4: Tag je Eintrag und freie Tage (Urlaub, Krank, Feiertag, Sonstiges).
+        migrator.registerMigration("v4") { db in
+            try db.alter(table: "timeEntry") { t in
+                // NULL = ohne Tag.
+                t.add(column: "tag", .text)
+            }
+            // Für die Tag-Vorschläge (zuletzt genutzte Tags je Projekt).
+            try db.execute(sql: """
+                CREATE INDEX timeEntry_tag ON timeEntry(tag, projectId, startedAt)
+                WHERE tag IS NOT NULL
+                """)
+            try db.create(table: "dayOff") { t in
+                t.primaryKey("id", .blob)
+                // Kalendertag als Text `YYYY-MM-DD`: unabhängig von Zeitzone und Uhrzeit.
+                t.column("date", .text).notNull().unique()
+                t.column("kind", .text).notNull()  // Rohwert von `DayOffKind`
+                t.column("note", .text)
             }
         }
 
