@@ -24,6 +24,8 @@ struct TaktApp: App {
     @State private var activityMonitor: ActivityMonitor
     /// Kalender-Anbindung: Termine in „Heute“, Spiegelung in den Kalender „Takt“.
     @State private var calendarService: CalendarService
+    /// Navigationswünsche (Befehlspalette, Menüleiste, Mitteilungen → Bereiche/Zeiträume/Einstellungen).
+    @State private var navigator = AppNavigator()
 
     init() {
         // Alle Mitteilungs-Kategorien in einem Rutsch (Pause, geplanter Block, vergessener Timer,
@@ -62,6 +64,7 @@ struct TaktApp: App {
                 .environment(musicController)
                 .environment(breakReminder)
                 .environment(calendarService)
+                .environment(navigator)
                 // Eingehende URLs (z. B. `takt://today` vom Widget) im vorhandenen Fenster
                 // behandeln statt ein neues zu öffnen.
                 .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
@@ -87,6 +90,7 @@ struct TaktApp: App {
                 .environment(pomodoroController)
                 .environment(activityMonitor)
                 .environment(calendarService)
+                .environment(navigator)
         }
 
         // Fenster-Stil statt Menü: eigene ruhige Oberfläche wie in der App.
@@ -96,6 +100,7 @@ struct TaktApp: App {
                 .environment(settings)
                 .environment(menuBarController)
                 .environment(pomodoroController)
+                .environment(navigator)
         } label: {
             MenuBarLabel()
                 .environment(store)
