@@ -10,6 +10,10 @@ struct TaktApp: App {
     @State private var settings: AppSettings
     @State private var musicController: MusicController
     @State private var breakReminder: BreakReminder
+    /// Menüleiste, Dock-Symbol und globaler Kurzbefehl.
+    @State private var menuBarController: MenuBarController
+    /// Nachfrage bei vergessenem Timer; lebt so lange wie die App.
+    @State private var forgottenTimerGuard: ForgottenTimerGuard
 
     init() {
         let settings = AppSettings()
@@ -23,10 +27,13 @@ struct TaktApp: App {
         _musicController = State(initialValue: musicController)
         _breakReminder = State(initialValue: breakReminder)
         _store = State(initialValue: store)
+        _menuBarController = State(initialValue: MenuBarController(store: store, settings: settings))
+        _forgottenTimerGuard = State(initialValue: ForgottenTimerGuard(store: store, settings: settings))
     }
 
     var body: some Scene {
-        WindowGroup {
+        // Kennung, damit die Menüleiste das Fenster nach dem Schließen wieder öffnen kann.
+        WindowGroup(id: MenuBarController.mainWindowId) {
             MainView()
                 .environment(store)
                 .environment(settings)
@@ -53,7 +60,30 @@ struct TaktApp: App {
                 .environment(settings)
                 .environment(musicController)
                 .environment(breakReminder)
+                .environment(menuBarController)
         }
+
+        // Fenster-Stil statt Menü: eigene ruhige Oberfläche wie in der App.
+        MenuBarExtra(isInserted: menuBarInserted) {
+            MenuBarContent()
+                .environment(store)
+                .environment(settings)
+                .environment(menuBarController)
+        } label: {
+            MenuBarLabel()
+                .environment(store)
+                .environment(menuBarController)
+        }
+        .menuBarExtraStyle(.window)
+    }
+
+    /// Schalter „In der Menüleiste anzeigen“. Entfernt der Nutzer das Symbol per ⌘-Ziehen,
+    /// wird der Schalter mit ausgeschaltet.
+    private var menuBarInserted: Binding<Bool> {
+        Binding(
+            get: { settings.menuBarEnabled },
+            set: { settings.menuBarEnabled = $0 }
+        )
     }
 }
 

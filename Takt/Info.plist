@@ -34,7 +34,7 @@
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.productivity</string>
 	<key>NSAppleEventsUsageDescription</key>
-	<string>Takt steuert Spotify, um beim Start eines Timers Musik abzuspielen.</string>
+	<string>Takt steuert Spotify und die Musik-App, um beim Start eines Timers Musik abzuspielen.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string></string>
 </dict>

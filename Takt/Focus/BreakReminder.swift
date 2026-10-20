@@ -154,6 +154,12 @@ final class BreakReminder: NSObject, UNUserNotificationCenterDelegate {
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
+        // Nachfrage „vergessener Timer“ gehört nicht hierher: an ForgottenTimerGuard weiterreichen.
+        if ForgottenTimerGuard.handles(response.notification) {
+            ForgottenTimerGuard.handleNotificationResponse(response)
+            completionHandler()
+            return
+        }
         let entryId = Self.entryId(of: response.notification)
         Task { @MainActor in self.didFire(entryId: entryId) }
         completionHandler()

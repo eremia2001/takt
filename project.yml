@@ -42,7 +42,7 @@ targets:
         CFBundleDisplayName: Takt
         CFBundleName: Takt
         LSApplicationCategoryType: public.app-category.productivity
-        NSAppleEventsUsageDescription: Takt steuert Spotify, um beim Start eines Timers Musik abzuspielen.
+        NSAppleEventsUsageDescription: Takt steuert Spotify und die Musik-App, um beim Start eines Timers Musik abzuspielen.
         NSHumanReadableCopyright: ""
         CFBundleURLTypes:
           - CFBundleURLName: dev.eremiya.takt

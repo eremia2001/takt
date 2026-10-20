@@ -46,9 +46,10 @@ struct ProjectEditor: View {
 
     private var isNew: Bool { draft.project == nil }
     private var trimmedName: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
-    private var playlistResult: SpotifyLink.Result { SpotifyLink.parse(playlist) }
-    /// Unveränderte, bereits gespeicherte Musikquelle (z. B. eine Nicht-Spotify-URL) bleibt
-    /// erlaubt, auch wenn das Spotify-Feld sie nicht versteht.
+    /// Bloße Namen gelten als Apple-Music-Playlist, wenn Apple Music bevorzugt ist.
+    private var playlistResult: MusicLink.Result { MusicLink.parse(playlist, preferring: settings.musicProvider) }
+    /// Unveränderte, bereits gespeicherte Musikquelle bleibt erlaubt, auch wenn die
+    /// Erkennung sie nicht (mehr) versteht.
     private var playlistUnchanged: Bool { playlist == (draft.project?.musicSource ?? "") }
     private var playlistInvalid: Bool { playlistResult == .invalid && !playlistUnchanged }
     private var rateResult: HourlyRateField.Result { HourlyRateField.parse(rateText) }
@@ -100,12 +101,8 @@ struct ProjectEditor: View {
                 ))
 
                 VStack(alignment: .leading, spacing: 4) {
-                    TextField("Spotify-Playlist", text: $playlist, prompt: Text("Link, optional"))
-                    if playlistInvalid {
-                        Text("Kein gültiger Spotify-Link (Playlist, Album oder Titel).")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+                    TextField("Musik", text: $playlist, prompt: Text("Link oder Playlist-Name, optional"))
+                    musicHint
                 }
 
                 if let errorMessage {
@@ -157,6 +154,30 @@ struct ProjectEditor: View {
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
+    /// Erkannte Musikquelle (Symbol + Art) oder Hinweis bei nicht erkannter Eingabe.
+    @ViewBuilder
+    private var musicHint: some View {
+        switch playlistResult {
+        case .empty:
+            EmptyView()
+        case .valid(let source):
+            Label(MusicLink.summary(of: source), systemImage: source.systemImage)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case .invalid:
+            if playlistInvalid {
+                Text(MusicLink.invalidHint)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text("Gespeicherte Quelle wird nicht erkannt.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
     private func save() {
         let musicSource: String?
         if playlistUnchanged {
@@ -164,7 +185,7 @@ struct ProjectEditor: View {
         } else {
             switch playlistResult {
             case .empty: musicSource = nil
-            case .valid(let uri): musicSource = uri
+            case .valid(let source): musicSource = source.storageString
             case .invalid: return
             }
         }

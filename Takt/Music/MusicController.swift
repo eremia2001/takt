@@ -4,258 +4,178 @@ import Observation
 import os
 import TaktCore
 
-/// Steuert die Spotify-Desktop-App per Apple Events passend zum laufenden Timer.
+/// Steuert Musik passend zum laufenden Timer: Spotify, Apple Music (Musik-App) oder ein
+/// Web-Link im Browser – je nach Quelle des Projekts.
 ///
 /// Reagiert auf Zustandsübergänge im `TaktStore` (auch auf Starts/Stopps aus dem Widget).
-/// Alle Skripte laufen nacheinander auf einem Hintergrund-Thread; die UI blockiert nie.
+/// Aufträge laufen nacheinander; ein neuer Auftrag bricht den laufenden ab (z. B. Stopp,
+/// während Spotify noch startet). AppleScripts laufen auf einem Hintergrund-Thread,
+/// die UI blockiert nie.
 @MainActor
 @Observable
 final class MusicController {
     @ObservationIgnored private let settings: AppSettings
-    @ObservationIgnored private let runner = AppleScriptRunner()
-    /// Zählt Aufträge hoch; ein laufender Auftrag bricht ab, sobald ein neuerer kommt
-    /// (z. B. Stopp, während Spotify noch startet).
-    @ObservationIgnored private var generation = 0
-    /// Zuletzt von Takt gestartete URI. Spotify verrät per AppleScript nur den aktuellen Titel,
-    /// nicht die Playlist – daher merken wir uns, was wir selbst gestartet haben.
-    @ObservationIgnored private var lastStartedURI: String?
+    @ObservationIgnored private let spotify: SpotifyPlayer
+    @ObservationIgnored private let appleMusic: AppleMusicPlayer
+    @ObservationIgnored private let browser: BrowserPlayer
 
-    private static let logger = Logger(subsystem: "dev.eremiya.takt", category: "music")
-    private static let spotifyBundleID = "com.spotify.client"
-    /// Nach dem Start von Spotify: so oft (im Sekundenabstand) versuchen, die Playlist zu starten.
-    private static let launchAttempts = 8
+    /// Laufender Auftrag; wird beim nächsten abgebrochen, der nächste wartet auf sein Ende.
+    @ObservationIgnored private var currentTask: Task<Void, Never>?
+    /// Anbieter, der zuletzt gestartet hat (oder dessen laufende Musik übernommen wurde).
+    /// Ihn pausieren Stopp und Pausenerinnerung.
+    @ObservationIgnored private var activeProvider: MusicProvider?
+    /// Zuletzt von Takt gestartete Quelle. Spotify verrät per AppleScript nur den aktuellen
+    /// Titel, nicht die Playlist – daher merken wir uns, was wir selbst gestartet haben.
+    /// Bei Browser-Quellen wird sie nach einer Pause gelöscht (dann ist nichts mehr „offen“).
+    @ObservationIgnored private var lastStarted: MusicSource?
+
+    private static let logger = MusicLog.logger
 
     init(settings: AppSettings) {
         self.settings = settings
+        let runner = AppleScriptRunner()
+        spotify = SpotifyPlayer(runner: runner)
+        appleMusic = AppleMusicPlayer(runner: runner)
+        browser = BrowserPlayer(sendsMediaKey: { [settings] in settings.browserPauseWithMediaKey })
     }
 
     // MARK: Öffentliche Schnittstelle
 
     /// Vom Store aufgerufen, wenn sich der laufende Eintrag geändert hat (nil→X, X→nil, X→Y).
     func timerDidChange(from old: RunningState?, to new: RunningState?) {
-        guard settings.musicEnabled else { return }
+        guard isEnabled else { return }
 
         if let new {
-            guard let uri = Self.nonEmpty(new.project.playlistURI) ?? Self.nonEmpty(settings.defaultPlaylistURI) else {
-                Self.logger.debug("Keine Playlist für „\(new.project.name, privacy: .public)“ – Musik bleibt unverändert.")
+            guard let source = source(for: new.project) else {
+                Self.logger.debug("Keine Musikquelle für „\(new.project.name, privacy: .public)“ – Musik bleibt unverändert.")
                 return
             }
-            let job = nextGeneration()
             let takeOver = settings.takeOverPlayingMusic
-            Task { await self.play(uri: uri, takeOver: takeOver, job: job) }
+            enqueue { try await self.start(source, takeOver: takeOver) }
         } else if old != nil, settings.pauseOnStop {
-            let job = nextGeneration()
-            Task { await self.pauseIfPlaying(job: job, reason: "Timer gestoppt") }
+            enqueue { await self.pauseActive(reason: "Timer gestoppt") }
         }
     }
 
-    /// Pausiert Spotify für die Pausenerinnerung, falls gerade Musik läuft.
+    /// Pausiert den zuletzt aktiven Player für die Pausenerinnerung, falls gerade Musik läuft.
     func pauseForBreak() {
-        guard settings.musicEnabled else { return }
-        let job = nextGeneration()
-        Task { await self.pauseIfPlaying(job: job, reason: "Pausenerinnerung") }
+        guard isEnabled else { return }
+        enqueue { await self.pauseActive(reason: "Pausenerinnerung") }
+    }
+
+    // MARK: Auswahl
+
+    /// „Keine“ als bevorzugter Anbieter schaltet die Steuerung ab, wie der globale Schalter.
+    private var isEnabled: Bool { settings.musicEnabled && settings.musicProvider != .none }
+
+    /// Quelle des Projekts, sonst die Standard-Quelle aus den Einstellungen.
+    /// Der bevorzugte Anbieter entscheidet bei mehrdeutigem Text (bloßer Name → Apple-Music-Playlist).
+    private func source(for project: Project) -> MusicSource? {
+        let preferred = settings.musicProvider
+        if let text = project.musicSource, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if let source = MusicSource.parse(text, preferring: preferred) { return source }
+            Self.logger.error("Musikquelle von „\(project.name, privacy: .public)“ nicht erkannt: \(text, privacy: .public) – nehme Standard-Quelle.")
+        }
+        guard let text = settings.defaultPlaylistURI else { return nil }
+        let source = MusicSource.parse(text, preferring: preferred)
+        if source == nil {
+            Self.logger.error("Standard-Quelle nicht erkannt: \(text, privacy: .public)")
+        }
+        return source
+    }
+
+    private func player(for provider: MusicProvider) -> (any MusicPlayer)? {
+        switch provider {
+        case .spotify: spotify
+        case .appleMusic: appleMusic
+        case .browser: browser
+        case .none: nil
+        }
     }
 
     // MARK: Abläufe
 
-    private func play(uri: String, takeOver: Bool, job: Int) async {
-        guard isSpotifyRunning else {
-            await launchAndPlay(uri: uri, job: job)
-            return
-        }
-
-        if let status = await playerStatus(), status.state == "playing" {
-            guard job == generation else { return }
-            // Gleicher Kontext läuft schon: nichts tun, damit die Musik nicht neu beginnt.
-            if status.trackURL == uri || lastStartedURI == uri {
-                Self.logger.info("Spotify spielt bereits \(uri, privacy: .public).")
-                return
-            }
-            if !takeOver {
-                Self.logger.info("Spotify spielt bereits etwas anderes; Übernehmen ist ausgeschaltet.")
-                return
+    /// Bricht den laufenden Auftrag ab und reiht `work` dahinter ein.
+    private func enqueue(_ work: @escaping @MainActor () async throws -> Void) {
+        let previous = currentTask
+        previous?.cancel()
+        currentTask = Task {
+            await previous?.value
+            guard !Task.isCancelled else { return }
+            do {
+                try await work()
+            } catch is CancellationError {
+                // Neuerer Auftrag hat übernommen.
+            } catch {
+                Self.logger.error("Musik: \(String(describing: error), privacy: .public)")
             }
         }
-        guard job == generation else { return }
-
-        if case .failure(let error) = await runner.run(Scripts.play(uri)) {
-            Self.logger.error("Abspielen von \(uri, privacy: .public) fehlgeschlagen: \(error.description, privacy: .public)")
-            return
-        }
-        lastStartedURI = uri
-        Self.logger.info("Spotify spielt \(uri, privacy: .public).")
     }
 
-    /// Startet Spotify und versucht danach bis zu ~8 s lang, die Playlist abzuspielen.
-    private func launchAndPlay(uri: String, job: Int) async {
-        Self.logger.info("Spotify läuft nicht – wird gestartet.")
-        if case .failure(let error) = await runner.run(Scripts.launch) {
-            Self.logger.error("Spotify konnte nicht gestartet werden: \(error.description, privacy: .public)")
-            return
+    private func start(_ source: MusicSource, takeOver: Bool) async throws {
+        guard let player = player(for: source.provider) else { return }
+
+        // Anbieterwechsel (z. B. Spotify → Browser): den bisherigen anhalten.
+        if let active = activeProvider, active != source.provider {
+            await pause(active, reason: "Anbieterwechsel")
+            activeProvider = nil
         }
+        try Task.checkCancellation()
 
-        for attempt in 1...Self.launchAttempts {
-            try? await Task.sleep(for: .seconds(1))
-            guard job == generation else { return }
-
-            switch await runner.run(Scripts.play(uri)) {
-            case .success:
-                // Direkt nach dem Start nimmt Spotify Befehle teils an, ohne zu spielen – prüfen.
-                try? await Task.sleep(for: .milliseconds(700))
-                if let status = await playerStatus(), status.state == "playing" {
-                    lastStartedURI = uri
-                    Self.logger.info("Spotify spielt \(uri, privacy: .public) (Versuch \(attempt)).")
+        if player.canReadState {
+            if player.isRunning, await player.isPlaying() {
+                try Task.checkCancellation()
+                // Gleiche Quelle läuft schon: nichts tun, damit die Musik nicht neu beginnt.
+                if lastStarted == source {
+                    Self.logger.info("\(source.provider.title, privacy: .public) spielt bereits \(source.storageString, privacy: .public).")
+                    activeProvider = source.provider
                     return
                 }
-            case .failure(let error):
-                if error.isPermissionDenied {
-                    Self.logger.error("Keine Erlaubnis, Spotify zu steuern: \(error.description, privacy: .public)")
+                if !takeOver {
+                    Self.logger.info("\(source.provider.title, privacy: .public) spielt bereits etwas anderes; Übernehmen ist ausgeschaltet.")
+                    activeProvider = source.provider
                     return
                 }
-                Self.logger.debug("Versuch \(attempt): \(error.description, privacy: .public)")
             }
-        }
-        Self.logger.error("Spotify hat \(uri, privacy: .public) nach dem Start nicht abgespielt.")
-    }
-
-    private func pauseIfPlaying(job: Int, reason: String) async {
-        // Spotify nicht starten, nur um zu pausieren.
-        guard isSpotifyRunning else { return }
-        guard let status = await playerStatus(), status.state == "playing", job == generation else { return }
-        if case .failure(let error) = await runner.run(Scripts.pause) {
-            Self.logger.error("Pausieren fehlgeschlagen: \(error.description, privacy: .public)")
+        } else if lastStarted == source, activeProvider == source.provider {
+            // Browser: Zustand nicht lesbar. Gleicher Link ist geöffnet und wurde nicht pausiert
+            // (Projektwechsel mit gleicher Quelle) – keinen zweiten Tab öffnen.
+            Self.logger.info("Browser: \(source.storageString, privacy: .public) ist bereits geöffnet.")
             return
         }
-        Self.logger.info("Spotify pausiert (\(reason, privacy: .public)).")
+        try Task.checkCancellation()
+
+        try await player.play(source)
+        lastStarted = source
+        activeProvider = source.provider
     }
 
-    // MARK: Hilfen
-
-    private func nextGeneration() -> Int {
-        generation += 1
-        return generation
-    }
-
-    /// Prüft ohne Apple Event, ob Spotify läuft (ein `tell` würde es sonst starten).
-    private var isSpotifyRunning: Bool {
-        NSWorkspace.shared.runningApplications.contains {
-            $0.bundleIdentifier == Self.spotifyBundleID && !$0.isTerminated
+    /// Pausiert den zuletzt aktiven Player. Hat Takt in dieser Sitzung noch nichts gestartet,
+    /// den bevorzugten Anbieter – außer dem Browser, dort würde die Medientaste blind umschalten.
+    private func pauseActive(reason: String) async {
+        let fallback: MusicProvider? = switch settings.musicProvider {
+        case .spotify, .appleMusic: settings.musicProvider
+        case .browser, .none: nil
         }
+        guard let provider = activeProvider ?? fallback else { return }
+        await pause(provider, reason: reason)
     }
 
-    private struct PlayerStatus {
-        /// `playing`, `paused` oder `stopped`.
-        let state: String
-        /// `spotify:track:…` des aktuellen Titels, falls vorhanden.
-        let trackURL: String?
-    }
+    private func pause(_ provider: MusicProvider, reason: String) async {
+        guard let player = player(for: provider) else { return }
+        Self.logger.debug("\(provider.title, privacy: .public) pausieren (\(reason, privacy: .public)).")
 
-    private func playerStatus() async -> PlayerStatus? {
-        switch await runner.run(Scripts.status) {
-        case .success(let output):
-            let parts = (output ?? "").split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false)
-            guard let state = parts.first, !state.isEmpty else { return nil }
-            let track = parts.count > 1 ? String(parts[1]) : ""
-            return PlayerStatus(state: String(state), trackURL: track.isEmpty ? nil : track)
-        case .failure(let error):
-            Self.logger.error("Spotify-Status nicht lesbar: \(error.description, privacy: .public)")
-            return nil
-        }
-    }
-
-    private static func nonEmpty(_ text: String?) -> String? {
-        guard let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
-            return nil
-        }
-        return trimmed
-    }
-}
-
-// MARK: - Skripte
-
-private enum Scripts {
-    /// Zeitlimit je Apple Event, damit ein hängendes Spotify die Warteschlange nicht minutenlang blockiert.
-    private static let timeout = 15
-
-    static let launch = #"tell application "Spotify" to launch"#
-
-    static let status = """
-        tell application "Spotify"
-            with timeout of \(timeout) seconds
-                set playerState to player state as string
-                set trackURL to ""
-                try
-                    set trackURL to spotify url of current track
-                end try
-                return playerState & "|" & trackURL
-            end timeout
-        end tell
-        """
-
-    static let pause = """
-        tell application "Spotify"
-            with timeout of \(timeout) seconds
-                pause
-            end timeout
-        end tell
-        """
-
-    /// `spotify:playlist:…`, `spotify:album:…` und `spotify:track:…` gehen direkt per `play track`.
-    static func play(_ uri: String) -> String {
-        """
-        tell application "Spotify"
-            with timeout of \(timeout) seconds
-                play track "\(escaped(uri))"
-            end timeout
-        end tell
-        """
-    }
-
-    /// Maskiert Zeichen, die ein AppleScript-Zeichenkettenliteral beenden würden.
-    private static func escaped(_ text: String) -> String {
-        text.replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-    }
-}
-
-// MARK: - AppleScript-Ausführung
-
-/// Fehler eines AppleScripts mit Nummer und Meldung aus `NSAppleScript`.
-struct AppleScriptError: Error, Sendable, CustomStringConvertible {
-    let code: Int
-    let message: String
-
-    /// -1743: Der Nutzer hat die Automation (Takt → Spotify) abgelehnt.
-    var isPermissionDenied: Bool { code == -1743 }
-
-    var description: String { "\(message) (\(code))" }
-}
-
-/// Führt `NSAppleScript` in-process auf einer seriellen Hintergrund-Warteschlange aus.
-/// `NSAppleScript` ist nicht threadsicher; die serielle Warteschlange stellt sicher,
-/// dass nie zwei Skripte gleichzeitig laufen.
-final class AppleScriptRunner: @unchecked Sendable {
-    private let queue = DispatchQueue(label: "dev.eremiya.takt.applescript", qos: .userInitiated)
-
-    func run(_ source: String) async -> Result<String?, AppleScriptError> {
-        await withCheckedContinuation { continuation in
-            queue.async {
-                continuation.resume(returning: Self.execute(source))
+        if provider == .browser {
+            // Medientaste nur, wenn Takt den Link geöffnet und seitdem nicht schon pausiert hat –
+            // sonst würde sie die Wiedergabe wieder starten.
+            guard lastStarted?.provider == .browser else {
+                Self.logger.debug("Browser: nichts von Takt Geöffnetes zu pausieren.")
+                return
             }
+            await player.pause()
+            lastStarted = nil
+            return
         }
-    }
-
-    private static func execute(_ source: String) -> Result<String?, AppleScriptError> {
-        guard let script = NSAppleScript(source: source) else {
-            return .failure(AppleScriptError(code: 0, message: "Skript konnte nicht angelegt werden"))
-        }
-        var errorInfo: NSDictionary?
-        let output = script.executeAndReturnError(&errorInfo)
-        if let errorInfo {
-            let code = (errorInfo[NSAppleScript.errorNumber] as? NSNumber)?.intValue ?? 0
-            let message = errorInfo[NSAppleScript.errorMessage] as? String ?? "Unbekannter Fehler"
-            return .failure(AppleScriptError(code: code, message: message))
-        }
-        return .success(output.stringValue)
+        await player.pause()
     }
 }
