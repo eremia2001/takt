@@ -2,7 +2,8 @@ import SwiftUI
 import TaktCore
 
 /// Kennzahlen-Reihe: Gesamt · Business/Privat · Abrechenbar · Umsatz.
-/// Dezente Kacheln, große Zahl, kleine Beschriftung.
+/// Dezente Kacheln, große Zahl, kleine Beschriftung. In der Woche mit Wochenziel darunter
+/// eine schmale Zeile mit dem Fortschritt.
 struct ReportsMetrics: View {
     let data: ReportsData
     let theme: DesignTheme
@@ -10,6 +11,15 @@ struct ReportsMetrics: View {
     private var report: Report { data.report }
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            tiles
+            if let goal = report.goal {
+                ReportsGoalRow(goal: goal, workdays: report.workdays, theme: theme)
+            }
+        }
+    }
+
+    private var tiles: some View {
         HStack(alignment: .top, spacing: 12) {
             tile("Gesamt") {
                 bigNumber(ReportsFormat.duration(report.total))
@@ -124,5 +134,71 @@ struct ReportsMetrics: View {
         if missing == 1 { return "1 Projekt ohne Satz" }
         if missing > 1 { return "\(missing) Projekte ohne Satz" }
         return "für \(ReportsFormat.duration(report.roundedBillable)) h"
+    }
+}
+
+/// „Wochenziel 25:36 von 32:00 (4 Arbeitstage) · 80 %“ mit schmalem Fortschrittsbalken.
+/// Projektneutral in der Akzentfarbe; ab 100 % grün. Das Ziel ist schon um freie Tage gekürzt.
+struct ReportsGoalRow: View {
+    let goal: GoalProgress
+    let workdays: Int
+    let theme: DesignTheme
+
+    private var isReached: Bool { goal.fraction >= 1 }
+    private var barColor: Color { isReached ? .green : .accentColor }
+
+    var body: some View {
+        HStack(spacing: 14) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text("Wochenziel")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(theme.tertiary)
+                Text(ReportsFormat.duration(goal.achieved))
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                Text("von \(ReportsFormat.duration(goal.adjustedTarget))")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Text("(\(ReportsFormat.workdays(workdays)))")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(theme.tertiary)
+            }
+            .lineLimit(1)
+            .fixedSize()
+
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(theme.track)
+                    Capsule()
+                        .fill(barColor)
+                        .frame(width: goal.fraction > 0 ? max(5, geo.size.width * min(1, goal.fraction)) : 0)
+                }
+            }
+            .frame(height: 5)
+            .frame(minWidth: 60)
+
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                if isReached {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.green)
+                } else {
+                    Text("noch \(ReportsFormat.duration(goal.remaining))")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(theme.tertiary)
+                }
+                Text(ReportsFormat.percent(goal.fraction))
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundStyle(isReached ? AnyShapeStyle(Color.green) : AnyShapeStyle(.primary))
+            }
+            .lineLimit(1)
+            .fixedSize()
+        }
+        .monospacedDigit()
+        .padding(.horizontal, 16)
+        .frame(height: 36)
+        .background(theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(theme.hairline, lineWidth: 1))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Wochenziel \(ReportsFormat.duration(goal.achieved)) von \(ReportsFormat.duration(goal.adjustedTarget)), \(ReportsFormat.percent(goal.fraction))")
     }
 }

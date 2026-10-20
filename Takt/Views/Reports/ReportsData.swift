@@ -70,6 +70,20 @@ struct ReportsData {
         report.rows.filter { $0.hourlyRate == nil && $0.roundedBillableDuration > 0 }
     }
 
+    /// Freie Tage im Zeitraum nach Tagesbeginn (für das Diagramm).
+    var daysOffByDay: [Date: DayOff] {
+        var result: [Date: DayOff] = [:]
+        for dayOff in report.daysOff {
+            if let day = dayOff.startOfDay(calendar: calendar) { result[day] = dayOff }
+        }
+        return result
+    }
+
+    /// Mindestens ein Eintrag des Projekts hat ein Tag (sonst lohnt die Aufschlüsselung nicht).
+    func hasTags(_ row: ProjectReportRow) -> Bool {
+        row.byTag.contains { $0.tag != nil }
+    }
+
     /// Einträge eines Projekts im Zeitraum, chronologisch.
     func entries(for projectId: UUID) -> [TimeEntry] {
         entries.filter { $0.projectId == projectId }
@@ -182,6 +196,8 @@ struct ReportsActions {
     var exportEntries: () -> Void = {}
     var exportSummary: () -> Void = {}
     var importToggl: () -> Void = {}
+    /// Öffnet „Freie Tage“ für den gewählten Zeitraum.
+    var editDaysOff: () -> Void = {}
 }
 
 // MARK: - Formate
@@ -217,6 +233,21 @@ enum ReportsFormat {
         let c = calendar.dateComponents([.weekday, .day, .month], from: date)
         let weekdays = ["Sonntag", "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag"]
         return "\(weekdays[(c.weekday ?? 1) - 1]), \(c.day ?? 0). \(monthsShort[(c.month ?? 1) - 1])"
+    }
+
+    /// „4 Arbeitstage“, „1 Arbeitstag“, „kein Arbeitstag“.
+    static func workdays(_ count: Int) -> String {
+        switch count {
+        case 0: "kein Arbeitstag"
+        case 1: "1 Arbeitstag"
+        default: "\(count) Arbeitstage"
+        }
+    }
+
+    /// Prozent ohne Nachkommastellen, „80 %“.
+    static func percent(_ fraction: Double) -> String {
+        guard fraction.isFinite else { return "–" }
+        return "\(Int((fraction * 100).rounded())) %"
     }
 
     /// Hinweis zur Rundung unter der abrechenbaren Zeit.

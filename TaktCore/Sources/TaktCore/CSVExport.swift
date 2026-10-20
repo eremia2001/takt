@@ -10,7 +10,7 @@ public enum CSVExport {
     /// Kopfzeile der Einzeleinträge.
     public static let entryHeader = [
         "Datum", "Start", "Ende", "Dauer (h:mm)", "Dauer (dezimal)", "Projekt", "Kunde",
-        "Business/Privat", "Abrechenbar", "Stundensatz", "Betrag", "Notiz",
+        "Business/Privat", "Abrechenbar", "Stundensatz", "Betrag", "Notiz", "Tag",
     ]
 
     /// Kopfzeile der Projektsummen.
@@ -62,6 +62,7 @@ public enum CSVExport {
                 rate.map { Money.germanString($0) } ?? "",
                 amount,
                 entry.nextStep ?? "",
+                entry.tag ?? "",
             ]))
         }
         return byteOrderMark + lines.joined(separator: lineEnding) + lineEnding

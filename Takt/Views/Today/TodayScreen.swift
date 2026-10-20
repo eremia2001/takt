@@ -2,6 +2,7 @@ import SwiftUI
 
 // Ansicht „Heute“ im Entwurf „Farbkarte“. Von oben nach unten:
 //   Start-Kapseln: alle aktiven Projekte, gruppiert nach Business | Privat, dazu „+ Eintrag“.
+//   Schnelleingabe: Feld mit Live-Vorschau (⌘N), siehe `TodayQuickEntry`.
 //   Farbkarte: läuft → Projektfarbe füllt die Karte (wie Widget „Farbfläche“);
 //              Pause → neutrale Karte mit Tagessumme und „Weiter mit …“.
 //   Nächster Block: geplanter Start („14:00 · Kundenportal“) oder „Block planen…“.
@@ -12,12 +13,19 @@ import SwiftUI
 struct TodayScreen: View {
     let data: TodayData
     var actions = TodayActions()
+    /// Nur für Vorschauen und das Render-Harness: vorbelegter Text der Schnelleingabe.
+    var initialQuickText = ""
     @Environment(\.colorScheme) private var scheme
     private var theme: DesignTheme { DesignTheme(scheme: scheme) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            TodayStartRow(data: data, theme: theme, actions: actions)
+            VStack(alignment: .leading, spacing: 10) {
+                TodayStartRow(data: data, theme: theme, actions: actions)
+                if !data.projects.isEmpty {
+                    TodayQuickEntry(theme: theme, actions: actions, initialText: initialQuickText)
+                }
+            }
             if let running = data.running {
                 TodayRunningCard(data: data, running: running, theme: theme, actions: actions)
             } else {
@@ -147,6 +155,7 @@ private struct TodayRunningCard: View {
 
     @State private var isStopPopoverShown = false
     @State private var nextStep = ""
+    @State private var tag = ""
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 0) {
@@ -155,7 +164,8 @@ private struct TodayRunningCard: View {
                     .font(.system(size: 19, weight: .semibold))
                     .foregroundStyle(.white)
                     .lineLimit(1)
-                Text("seit \(TodayFormat.clock(running.start)) · \(running.project.kind)")
+                Text(["seit \(TodayFormat.clock(running.start))", running.project.kind, running.tag.map { "#\($0)" }]
+                    .compactMap { $0 }.joined(separator: " · "))
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.white.opacity(0.75))
                     .padding(.top, 2)
@@ -200,6 +210,7 @@ private struct TodayRunningCard: View {
     private var stopButton: some View {
         Button {
             nextStep = ""
+            tag = running.tag ?? ""
             isStopPopoverShown = true
         } label: {
             HStack(spacing: 8) {
@@ -227,6 +238,14 @@ private struct TodayRunningCard: View {
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 280)
                 .onSubmit(stop)
+            VStack(alignment: .leading, spacing: 6) {
+                TextField("Tag (optional, z. B. Meeting)", text: $tag)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 280)
+                    .onSubmit(stop)
+                TagSuggestionChips(text: $tag, suggestions: actions.tagSuggestions(running.project.id, tag))
+                    .frame(width: 280, alignment: .leading)
+            }
             HStack {
                 Spacer()
                 Button("Abbrechen", role: .cancel) {
@@ -242,7 +261,7 @@ private struct TodayRunningCard: View {
 
     private func stop() {
         isStopPopoverShown = false
-        actions.stop(nextStep)
+        actions.stop(nextStep, tag)
     }
 }
 
@@ -317,6 +336,30 @@ private struct TodayIdleCard: View {
         .frame(height: 190)
         .background(theme.surface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(theme.hairline, lineWidth: 1))
+        .overlay(alignment: .topTrailing) {
+            dayOffLink
+                .padding(.top, 16)
+                .padding(.trailing, 20)
+        }
+    }
+
+    /// „Heute frei …“ bzw. die Art des freien Tags; öffnet „Freie Tage“ für heute.
+    private var dayOffLink: some View {
+        Button(action: actions.markTodayOff) {
+            HStack(spacing: 5) {
+                Image(systemName: data.todayOff == nil ? "sun.max" : "sun.max.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                Text(data.todayOff.map { "Heute frei: \($0)" } ?? "Heute frei …")
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .foregroundStyle(data.todayOff == nil ? AnyShapeStyle(theme.tertiary) : AnyShapeStyle(.secondary))
+            .padding(.horizontal, 9)
+            .frame(height: 22)
+            .background(data.todayOff == nil ? Color.clear : theme.track, in: Capsule())
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .help(data.todayOff == nil ? "Heute als freien Tag markieren (Urlaub, Krank …)" : "Freien Tag ändern")
     }
 }
 
@@ -691,6 +734,9 @@ private struct TodayEntryList: View {
                     Text(entry.project.name)
                         .font(.system(size: 14, weight: .medium))
                         .lineLimit(1)
+                    if let tag = entry.tag {
+                        TagCapsule(tag: tag)
+                    }
                     if entry.isRunning {
                         Text("läuft")
                             .font(.system(size: 11, weight: .semibold))

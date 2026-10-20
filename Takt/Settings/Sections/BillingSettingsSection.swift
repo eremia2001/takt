@@ -1,13 +1,14 @@
 import SwiftUI
 import TaktCore
 
-/// Abschnitt „Abrechnung“: Rundung, Währung, Standard-Stundensatz.
+/// Abschnitt „Abrechnung“: Rundung, Währung, Standard-Stundensatz, Wochenziel.
 struct BillingSettingsSection: View {
     @Environment(AppSettings.self) private var settings
 
     /// Eingaben; übernommen wird nur Gültiges, damit halbe Eingaben nichts überschreiben.
     @State private var currencyText = ""
     @State private var rateText = ""
+    @State private var goalText = ""
 
     var body: some View {
         @Bindable var settings = settings
@@ -45,10 +46,34 @@ struct BillingSettingsSection: View {
                 prompt: "keiner",
                 hint: "Gilt für Projekte ohne eigenen Satz."
             )
+
+            VStack(alignment: .leading, spacing: 4) {
+                LabeledContent("Wochenziel (abrechenbare Stunden)") {
+                    HStack(spacing: 6) {
+                        TextField("Wochenziel", text: $goalText, prompt: Text("keins"))
+                            .labelsHidden()
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 70)
+                        Text("h")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Text(Self.goalHint(goalText))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .onAppear {
             currencyText = settings.currencyCode
             rateText = HourlyRateField.text(for: settings.defaultHourlyRate)
+            goalText = Self.goalText(settings.weeklyGoalHours)
+        }
+        .onChange(of: goalText) {
+            switch Self.parseGoal(goalText) {
+            case .empty: settings.weeklyGoalHours = nil
+            case .valid(let hours): if settings.weeklyGoalHours != hours { settings.weeklyGoalHours = hours }
+            case .invalid: break
+            }
         }
         .onChange(of: currencyText) {
             // Auf drei Großbuchstaben begrenzen; nur Gültiges speichern.
@@ -67,6 +92,45 @@ struct BillingSettingsSection: View {
             case .valid(let rate): settings.defaultHourlyRate = rate
             case .invalid: break
             }
+        }
+    }
+}
+
+// MARK: - Wochenziel
+
+extension BillingSettingsSection {
+    enum GoalInput: Equatable {
+        case empty
+        case valid(Double)
+        case invalid
+    }
+
+    /// Leer → kein Ziel; sonst Stunden über 0 bis 168, Komma oder Punkt („32“, „32,5“).
+    static func parseGoal(_ text: String) -> GoalInput {
+        if text.trimmingCharacters(in: .whitespaces).isEmpty { return .empty }
+        guard let value = Money.parse(text),
+              let hours = SharedSettings.validWeeklyGoalHours(NSDecimalNumber(decimal: value).doubleValue)
+        else { return .invalid }
+        return .valid(hours)
+    }
+
+    /// Anzeige eines gespeicherten Ziels: „32“, „32,5“.
+    static func goalText(_ hours: Double?) -> String {
+        guard let hours else { return "" }
+        if hours == hours.rounded() { return String(Int(hours)) }
+        return String(format: "%.2f", hours)
+            .replacingOccurrences(of: ".", with: ",")
+            .replacingOccurrences(of: #",?0+$"#, with: "", options: .regularExpression)
+    }
+
+    static func goalHint(_ text: String) -> String {
+        switch parseGoal(text) {
+        case .empty:
+            "Leer = kein Ziel. Berichte zeigen in der Woche den Fortschritt."
+        case .valid(let hours):
+            "Passt sich freien Tagen an: bei 4 Arbeitstagen gelten \(goalText(hours * 4 / 5)) h."
+        case .invalid:
+            "Bitte Stunden zwischen 0 und 168 eingeben, z. B. 32 oder 32,5."
         }
     }
 }

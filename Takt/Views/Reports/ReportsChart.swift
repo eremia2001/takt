@@ -4,7 +4,8 @@ import TaktCore
 
 /// Gestapelte Balken je Tag (beim Tag: je Stunde, bei langen Zeiträumen: je Woche) in
 /// Projektfarben. Achsen minimal, nur waagrechte Haarlinien. Beim Überfahren zeigt ein
-/// Hinweis den Tag und die Summe.
+/// Hinweis den Tag und die Summe. Freie Tage (Urlaub, Krank …) sind als schraffierte Spalte
+/// hinterlegt.
 struct ReportsChart: View {
     let data: ReportsData
     let theme: DesignTheme
@@ -91,6 +92,11 @@ struct ReportsChart: View {
                 }
             }
         }
+        .chartBackground { proxy in
+            if unit == .day {
+                daysOffBackground(proxy: proxy, buckets: buckets)
+            }
+        }
         .chartOverlay { proxy in
             GeometryReader { geo in
                 Rectangle()
@@ -112,6 +118,41 @@ struct ReportsChart: View {
         .padding(.top, 18)
         .frame(height: 190)
         .accessibilityLabel("Verlauf")
+    }
+
+    // MARK: Freie Tage
+
+    /// Schraffierte Spalten hinter den Balken freier Tage, oben mit der Art („Urlaub“).
+    private func daysOffBackground(proxy: ChartProxy, buckets: [ReportsData.ChartBucket]) -> some View {
+        let daysOff = data.daysOffByDay
+        let marked = buckets.compactMap { bucket in daysOff[bucket.start].map { (bucket, $0) } }
+        return GeometryReader { geo in
+            if let plotFrame = proxy.plotFrame {
+                let frame = geo[plotFrame]
+                ForEach(marked, id: \.0.start) { bucket, dayOff in
+                    if let x1 = proxy.position(forX: bucket.start), let x2 = proxy.position(forX: bucket.end) {
+                        let width = max(4, (x2 - x1) * 0.86)
+                        VStack(spacing: 0) {
+                            // Beschriftung nur, wenn die Spalte breit genug ist (Monat: nur Schraffur).
+                            if width >= 44 {
+                                Text(dayOff.kind.title)
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundStyle(theme.tertiary)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.7)
+                                    .padding(.top, 6)
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .frame(width: width, height: frame.height)
+                        .background(HatchPattern(theme: theme))
+                        .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                        .position(x: frame.minX + (x1 + x2) / 2, y: frame.midY)
+                        .accessibilityLabel("\(ReportsFormat.tooltipDay(bucket.start, calendar: data.calendar)): \(dayOff.kind.title)")
+                    }
+                }
+            }
+        }
     }
 
     // MARK: Werte
@@ -206,6 +247,7 @@ struct ReportsChart: View {
             title = String(format: "%02d–%02d Uhr", hour, hour + 1)
         case .day:
             title = ReportsFormat.tooltipDay(bucket.start, calendar: calendar)
+                + (data.daysOffByDay[bucket.start].map { " · \($0.kind.title)" } ?? "")
         case .week:
             title = "KW \(data.isoCalendar.component(.weekOfYear, from: bucket.start))"
         }
@@ -223,5 +265,26 @@ struct ReportsChart: View {
         .overlay(Capsule().stroke(theme.hairline, lineWidth: 1))
         .shadow(color: .black.opacity(theme.dark ? 0.3 : 0.08), radius: 6, y: 2)
         .fixedSize()
+    }
+}
+
+/// Leise Schraffur (diagonale Linien auf `track`) für freie Tage im Diagramm.
+struct HatchPattern: View {
+    let theme: DesignTheme
+
+    var body: some View {
+        Canvas { context, size in
+            context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(theme.track))
+            let spacing: CGFloat = 7
+            var path = Path()
+            var x = -size.height
+            while x < size.width {
+                path.move(to: CGPoint(x: x, y: size.height))
+                path.addLine(to: CGPoint(x: x + size.height, y: 0))
+                x += spacing
+            }
+            context.stroke(path, with: .color(theme.dark ? .white.opacity(0.11) : .black.opacity(0.09)), lineWidth: 1)
+        }
+        .accessibilityHidden(true)
     }
 }

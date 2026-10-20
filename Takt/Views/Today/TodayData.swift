@@ -28,6 +28,8 @@ struct TodayData {
         /// `nil` = läuft.
         let end: Date?
         let nextStep: String?
+        /// Tag des Eintrags („Meeting“), `nil` = ohne.
+        var tag: String? = nil
 
         var isRunning: Bool { end == nil }
 
@@ -69,6 +71,8 @@ struct TodayData {
     var runningNextStep: String?
     /// Geplanter nächster Block, falls vorhanden.
     var plannedBlock: PlannedItem? = nil
+    /// Heute als frei markiert: Art („Urlaub“), sonst `nil`.
+    var todayOff: String? = nil
 
     var running: EntryItem? { entries.last(where: \.isRunning) }
     var lastCompleted: EntryItem? { entries.last(where: { !$0.isRunning }) }
@@ -107,11 +111,43 @@ struct TodayData {
     }
 }
 
+// MARK: - Schnelleingabe
+
+/// Vorschau einer Schnelleingabe, ohne TaktCore-Abhängigkeit (`TodayView` übersetzt das
+/// Ergebnis von `QuickEntryParser`).
+enum QuickEntryPreview: Hashable {
+    /// Fertiger Eintrag: Projekt, Tag (nur wenn nicht heute, z. B. „gestern“), Spanne, Dauer.
+    case entry(project: TodayData.ProjectItem, day: String?, start: Date, end: Date, tag: String?, note: String?)
+    /// Timer-Start; `since` gesetzt, wenn er rückwirkend beginnt.
+    case start(project: TodayData.ProjectItem, since: Date?, tag: String?, note: String?)
+    /// Mehrere Projekte passen gleich gut – Auswahl per Klick.
+    case ambiguous(message: String, candidates: [TodayData.ProjectItem])
+    case error(String)
+
+    var isValid: Bool {
+        switch self {
+        case .entry, .start: true
+        case .ambiguous, .error: false
+        }
+    }
+}
+
 /// Aktionen der Ansicht; `TodayView` verdrahtet sie mit dem Store.
 struct TodayActions {
     var start: (TodayData.ProjectItem) -> Void = { _ in }
-    /// Stoppt mit optionalem „Nächsten Schritt“.
-    var stop: (String) -> Void = { _ in }
+    /// Stoppt mit optionalem „Nächsten Schritt“ und dem Tag des laufenden Eintrags
+    /// (leer = ohne Tag).
+    var stop: (_ nextStep: String, _ tag: String) -> Void = { _, _ in }
+    /// Tag-Vorschläge für ein Projekt und einen Anfang (leer = zuletzt genutzte).
+    var tagSuggestions: (_ projectId: UUID?, _ prefix: String) -> [String] = { _, _ in [] }
+    /// Live-Vorschau der Schnelleingabe; `nil` bei leerem Text.
+    var previewQuickEntry: (String) -> QuickEntryPreview? = { _ in nil }
+    /// Übernimmt die Schnelleingabe. Ergebnis: Bestätigung bei Erfolg, sonst Fehlertext.
+    var commitQuickEntry: (String) -> Result<String, QuickEntryFailure> = { _ in .failure(QuickEntryFailure(message: "")) }
+    /// Ersetzt im Text das mehrdeutige Projekt durch das gewählte; `nil`, wenn das nicht gelingt.
+    var resolveQuickEntry: (_ text: String, _ project: TodayData.ProjectItem) -> String? = { _, _ in nil }
+    /// Öffnet „Freie Tage“ für heute.
+    var markTodayOff: () -> Void = {}
     var openEntry: (TodayData.EntryItem) -> Void = { _ in }
     var deleteEntry: (TodayData.EntryItem) -> Void = { _ in }
     var addEntry: () -> Void = {}
@@ -121,6 +157,11 @@ struct TodayActions {
     var clearPlannedBlock: () -> Void = {}
     /// Plant den nächsten Block: Projekt, Beginn, Notiz (leer = keine).
     var planBlock: (UUID, Date, String) -> Void = { _, _, _ in }
+}
+
+/// Fehler beim Übernehmen einer Schnelleingabe (Text für die Vorschauzeile).
+struct QuickEntryFailure: Error, Hashable {
+    let message: String
 }
 
 // MARK: - Formate
@@ -178,8 +219,9 @@ extension TodayData {
     private static var sampleMorning: [EntryItem] {
         [
             EntryItem(id: UUID(), project: sampleWebsite, start: sampleTime(9, 5), end: sampleTime(10, 40),
-                      nextStep: "Deploy-Skript fertig machen"),
-            EntryItem(id: UUID(), project: samplePortal, start: sampleTime(10, 50), end: sampleTime(12, 20), nextStep: nil),
+                      nextStep: "Deploy-Skript fertig machen", tag: "Bugfix"),
+            EntryItem(id: UUID(), project: samplePortal, start: sampleTime(10, 50), end: sampleTime(12, 20), nextStep: nil,
+                      tag: "Meeting"),
             EntryItem(id: UUID(), project: sampleTax, start: sampleTime(13, 0), end: sampleTime(13, 35), nextStep: nil),
         ]
     }
@@ -205,7 +247,8 @@ extension TodayData {
         sample(
             now: sampleTime(15, 56),
             entries: sampleMorning + [
-                EntryItem(id: UUID(), project: samplePortal, start: sampleTime(14, 32), end: nil, nextStep: nil),
+                EntryItem(id: UUID(), project: samplePortal, start: sampleTime(14, 32), end: nil, nextStep: nil,
+                          tag: "Review"),
             ],
             resume: nil
         )

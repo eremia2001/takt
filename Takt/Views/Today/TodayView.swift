@@ -10,6 +10,9 @@ struct TodayView: View {
 
     @State private var editorDraft: EntryDraft?
     @State private var pendingDeletion: TimeEntry?
+    @State private var isDayOffSheetShown = false
+    /// Art des freien Tags heute; der Store hält freie Tage nicht vor, daher hier nachgeladen.
+    @State private var todayOff: DayOffKind?
 
     var body: some View {
         // Läuft etwas, im Takt des Eintrags ticken, damit `h:mm` genau zur vollen Minute springt.
@@ -18,10 +21,15 @@ struct TodayView: View {
                 .onChange(of: context.date) {
                     // Der längste Block wächst mit dem laufenden Eintrag.
                     if store.running != nil { store.refreshFocus(at: context.date) }
+                    reloadTodayOff(now: context.date)
                 }
         }
+        .onAppear { reloadTodayOff() }
         .sheet(item: $editorDraft) { draft in
             EntryEditor(draft: draft)
+        }
+        .sheet(isPresented: $isDayOffSheetShown, onDismiss: { reloadTodayOff() }) {
+            DaysOffSheet(month: .now, selected: .now)
         }
         .confirmationDialog(
             "Eintrag löschen?",
@@ -46,7 +54,8 @@ struct TodayView: View {
                 project: item(for: entry.projectId),
                 start: entry.startedAt,
                 end: entry.endedAt,
-                nextStep: entry.nextStep
+                nextStep: entry.nextStep,
+                tag: entry.tag
             )
         }
 
@@ -76,7 +85,8 @@ struct TodayView: View {
             longestBlock: store.todayFocus.longestBlock,
             resume: resume,
             runningNextStep: runningNextStep,
-            plannedBlock: planned
+            plannedBlock: planned,
+            todayOff: todayOff?.title
         )
     }
 
@@ -99,7 +109,12 @@ struct TodayView: View {
     private var actions: TodayActions {
         TodayActions(
             start: { project in _ = store.start(projectId: project.id) },
-            stop: { nextStep in _ = store.stop(nextStep: nextStep) },
+            stop: stop,
+            tagSuggestions: { projectId, prefix in store.tagSuggestions(projectId: projectId, prefix: prefix) },
+            previewQuickEntry: previewQuickEntry,
+            commitQuickEntry: commitQuickEntry,
+            resolveQuickEntry: resolveQuickEntry,
+            markTodayOff: { isDayOffSheetShown = true },
             openEntry: { item in
                 if let entry = entry(id: item.id) {
                     editorDraft = EntryDraft(entry: entry, isNew: false)
@@ -114,6 +129,104 @@ struct TodayView: View {
                 store.planBlock(projectId: projectId, startAt: startAt, note: note)
             }
         )
+    }
+
+    /// Stoppt den Timer; ein geändertes Tag wird vorher am laufenden Eintrag gesichert
+    /// (der Store kennt kein Stoppen mit Tag).
+    private func stop(nextStep: String, tag: String) {
+        if var entry = store.running?.entry {
+            let newTag = TimeEntry.normalizedTag(tag)
+            if newTag != entry.tag {
+                entry.tag = newTag
+                guard store.updateEntry(entry) else { return }
+            }
+        }
+        store.stop(nextStep: nextStep)
+    }
+
+    private func reloadTodayOff(now: Date = .now) {
+        let interval = Calendar.current.dateInterval(of: .day, for: now)
+            ?? DateInterval(start: Calendar.current.startOfDay(for: now), duration: 24 * 3600)
+        let kind = store.daysOff(in: interval).first?.kind
+        if todayOff != kind { todayOff = kind }
+    }
+
+    // MARK: Schnelleingabe
+
+    private func previewQuickEntry(_ text: String) -> QuickEntryPreview? {
+        let now = Date.now
+        switch store.quickEntry(text, now: now) {
+        case .success(let quick):
+            guard let projectId = quick.projectId else { return .error(QuickEntryError.missingProject.errorDescription ?? "") }
+            let project = item(for: projectId)
+            if quick.isRunningStart {
+                // Wie `TaktStore.commit`: erst ab einer Minute Abstand rückwirkend.
+                let since = quick.start < now.addingTimeInterval(-60) ? quick.start : nil
+                return .start(project: project, since: since, tag: quick.tag, note: quick.note)
+            }
+            let end = quick.end ?? now
+            return .entry(project: project, day: Self.dayLabel(quick.start, now: now), start: quick.start, end: end,
+                          tag: quick.tag, note: quick.note)
+        case .failure(.empty):
+            return nil
+        case .failure(.ambiguousProject(let projects)):
+            return .ambiguous(message: "Mehrere Projekte passen:", candidates: projects.map(item))
+        case .failure(let error):
+            return .error(error.errorDescription ?? "Die Eingabe ist unvollständig.")
+        }
+    }
+
+    private func commitQuickEntry(_ text: String) -> Result<String, QuickEntryFailure> {
+        let now = Date.now
+        switch store.quickEntry(text, now: now) {
+        case .success(let quick):
+            let preview = previewQuickEntry(text)
+            guard store.commit(quick) else {
+                return .failure(QuickEntryFailure(message: store.consumeError() ?? "Die Eingabe konnte nicht übernommen werden."))
+            }
+            switch preview {
+            case let .entry(project, day, start, end, _, _):
+                let span = "\(TodayFormat.clock(start))–\(TodayFormat.clock(end))"
+                return .success("Eingetragen: \(project.name) · \([day, span].compactMap { $0 }.joined(separator: " "))")
+            case let .start(project, since, _, _):
+                return .success(since.map { "Gestartet: \(project.name) seit \(TodayFormat.clock($0))" } ?? "Gestartet: \(project.name)")
+            default:
+                return .success("Übernommen")
+            }
+        case .failure(let error):
+            return .failure(QuickEntryFailure(message: error.errorDescription ?? "Die Eingabe ist unvollständig."))
+        }
+    }
+
+    /// Ersetzt die Wörter, die mehrdeutig auf mehrere Projekte passen, durch den vollen Namen
+    /// des gewählten Projekts: probiert zusammenhängende Wortfolgen (höchstens drei Wörter) und
+    /// nimmt die erste, mit der die Eingabe eindeutig dieses Projekt ergibt.
+    private func resolveQuickEntry(_ text: String, _ project: TodayData.ProjectItem) -> String? {
+        let words = text.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard !words.isEmpty else { return nil }
+        for length in 1...min(3, max(1, words.count)) {
+            for start in 0...(words.count - length) where !words[start].hasPrefix("#") {
+                var candidate = words
+                candidate.replaceSubrange(start..<(start + length), with: [project.name])
+                let joined = candidate.joined(separator: " ")
+                if case .success(let quick) = store.quickEntry(joined), quick.projectId == project.id {
+                    return joined
+                }
+            }
+        }
+        return nil
+    }
+
+    /// „gestern“, „vorgestern“, sonst „Mo 19.10.“; heute `nil`.
+    private static func dayLabel(_ date: Date, now: Date) -> String? {
+        let calendar = Calendar.current
+        if calendar.isDate(date, inSameDayAs: now) { return nil }
+        let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: date), to: calendar.startOfDay(for: now)).day ?? 0
+        if days == 1 { return "gestern" }
+        if days == 2 { return "vorgestern" }
+        let weekdays = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"]
+        let c = calendar.dateComponents([.weekday, .day, .month], from: date)
+        return "\(weekdays[(c.weekday ?? 1) - 1]) \(c.day ?? 0).\(c.month ?? 0)."
     }
 
     private func entry(id: UUID) -> TimeEntry? {

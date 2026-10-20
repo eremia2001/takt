@@ -12,15 +12,17 @@ private enum BreakReminderID {
 }
 
 /// Kennungen der Mitteilung zum geplanten Block („Geplant: Kundenportal um 14:00“).
+/// Kategorie und Aktion „Starten“ stehen in `NotificationCategories.Planned`.
 private enum PlannedBlockID {
     static let request = "dev.eremiya.takt.planned-block"
-    static let category = "dev.eremiya.takt.planned-block"
-    static let startAction = "planned.start"
+    static let category = NotificationCategories.Planned.category
+    static let startAction = NotificationCategories.Planned.start
     static let blockKey = "blockId"
 }
 
 /// Plant pro Timer-Lauf genau eine lokale Mitteilung „Kurze Pause?“ und pausiert beim
-/// Auslösen auf Wunsch die Musik. Außerdem: Mitteilung zum geplanten Block, wenn dessen Beginn
+/// Auslösen auf Wunsch die Musik. Bei aktivem Pomodoro-Modus entfällt sie (der
+/// `PomodoroController` übernimmt die Pausen). Außerdem: Mitteilung zum geplanten Block, wenn dessen Beginn
 /// erreicht ist und kein Timer läuft (Aktion „Starten“).
 @MainActor
 @Observable
@@ -90,7 +92,9 @@ final class BreakReminder: NSObject, UNUserNotificationCenterDelegate {
 
     private func reschedule() {
         cancelPending()
-        guard settings.breakReminderEnabled, let current, firedEntryId != current.entry.id else { return }
+        // Pomodoro ersetzt die normale Pausenerinnerung.
+        guard settings.breakReminderEnabled, !settings.pomodoroEnabled,
+              let current, firedEntryId != current.entry.id else { return }
 
         let duration = TimeInterval(settings.breakReminderMinutes * 60)
         // Ab Beginn des Eintrags rechnen – Starts aus dem Widget können etwas zurückliegen.
@@ -102,6 +106,7 @@ final class BreakReminder: NSObject, UNUserNotificationCenterDelegate {
         content.title = "Kurze Pause?"
         content.body = "Du arbeitest seit \(DurationFormat.hourMinute(duration)) an \(current.project.name)."
         content.sound = .default
+        content.categoryIdentifier = NotificationCategories.Break.category
         content.userInfo = [BreakReminderID.entryKey: current.entry.id.uuidString]
 
         let request = UNNotificationRequest(
@@ -165,7 +170,6 @@ final class BreakReminder: NSObject, UNUserNotificationCenterDelegate {
         let center = center
         Task {
             await requestAuthorizationIfNeeded()
-            await Self.registerPlannedCategory(center)
             guard token == plannedToken else { return }
             do {
                 try await center.add(request)
@@ -179,24 +183,6 @@ final class BreakReminder: NSObject, UNUserNotificationCenterDelegate {
         Self.logger.info("Mitteilung zum geplanten Block in \(Int(delay / 60)) Min geplant.")
     }
 
-    /// Registriert die Kategorie mit der Aktion „Starten“, ohne andere Kategorien zu verlieren.
-    /// `ForgottenTimerGuard` registriert seine beim App-Start ebenfalls per Lesen-und-Ergänzen;
-    /// laufen beide gleichzeitig, kann eine Kategorie verloren gehen – daher kurz nachprüfen.
-    private static func registerPlannedCategory(_ center: UNUserNotificationCenter) async {
-        let category = UNNotificationCategory(
-            identifier: PlannedBlockID.category,
-            actions: [UNNotificationAction(identifier: PlannedBlockID.startAction, title: "Starten")],
-            intentIdentifiers: []
-        )
-        for _ in 0..<3 {
-            var categories = await center.notificationCategories()
-            if categories.contains(where: { $0.identifier == PlannedBlockID.category }) { return }
-            categories.insert(category)
-            center.setNotificationCategories(categories)
-            try? await Task.sleep(for: .milliseconds(500))
-        }
-    }
-
     private func cancelPending() {
         scheduleToken += 1
         fireTask?.cancel()
@@ -205,14 +191,7 @@ final class BreakReminder: NSObject, UNUserNotificationCenterDelegate {
     }
 
     private func requestAuthorizationIfNeeded() async {
-        let status = await center.notificationSettings().authorizationStatus
-        guard status == .notDetermined else { return }
-        do {
-            let granted = try await center.requestAuthorization(options: [.alert, .sound])
-            Self.logger.info("Mitteilungen \(granted ? "erlaubt" : "abgelehnt", privacy: .public).")
-        } catch {
-            Self.logger.error("Mitteilungs-Berechtigung fehlgeschlagen: \(error.localizedDescription, privacy: .public)")
-        }
+        await NotificationCategories.requestAuthorizationIfNeeded(center: center)
     }
 
     /// Auslösung – egal ob über den internen Wecker oder den Delegate; wirkt pro Lauf nur einmal.
@@ -234,8 +213,9 @@ final class BreakReminder: NSObject, UNUserNotificationCenterDelegate {
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
-        // Geplanter Block: nur anzeigen, keine Pausen-Auslösung.
-        if notification.request.identifier != PlannedBlockID.request {
+        // Nur die Pausenerinnerung löst etwas aus; alle anderen Mitteilungen (geplanter Block,
+        // vergessener Timer, Leerlauf, Pomodoro) werden nur angezeigt.
+        if notification.request.identifier == BreakReminderID.request {
             let entryId = Self.entryId(of: notification)
             Task { @MainActor in self.didFire(entryId: entryId) }
         }
@@ -250,6 +230,17 @@ final class BreakReminder: NSObject, UNUserNotificationCenterDelegate {
         // Nachfrage „vergessener Timer“ gehört nicht hierher: an ForgottenTimerGuard weiterreichen.
         if ForgottenTimerGuard.handles(response.notification) {
             ForgottenTimerGuard.handleNotificationResponse(response)
+            completionHandler()
+            return
+        }
+        // Ebenso Leerlauf und Pomodoro.
+        if IdleDetector.handles(response.notification) {
+            IdleDetector.handleNotificationResponse(response)
+            completionHandler()
+            return
+        }
+        if PomodoroController.handles(response.notification) {
+            PomodoroController.handleNotificationResponse(response)
             completionHandler()
             return
         }

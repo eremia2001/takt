@@ -360,7 +360,7 @@ Aussage; keine Sekunden; ruhig; Projektfarbe als einziger Akzent; Hell/Dunkel.
 
 ## Erfassung v3 (Tags, freie Tage, Wochenziel, Schnelleingabe)
 
-Datenbasis in `TaktCore`, App-Anbindung über `TaktStore`. Oberfläche folgt separat.
+Datenbasis in `TaktCore`, App-Anbindung über `TaktStore`, Oberfläche siehe „Oberfläche“ am Ende des Abschnitts.
 
 ### Datenmodell (Migration `v4`)
 
@@ -446,10 +446,61 @@ Datenbasis in `TaktCore`, App-Anbindung über `TaktStore`. Oberfläche folgt sep
 - `AppSettings.weeklyGoalHours` spiegelt bei jeder Änderung und beim Start dorthin und lädt die
   Widget-Timelines neu; `AppSettings.weeklyGoal` liefert Sekunden.
 
+### Oberfläche
+
+**Heute**
+- **Schnelleingabe** (`TodayQuickEntry`) unter den Start-Kapseln, volle Breite, Fokus per **⌘N**
+  (unsichtbarer Knopf; `File › New` ist in der App leer). Beim Tippen eine Vorschauzeile:
+  „● Kundenportal · 09:00–10:30 · 1:30 · #meeting · Standup“ (anderer Tag davor: „gestern“,
+  „Mo 19.10.“), bei Timer-Start „Startet jetzt: Kundenportal“ bzw. „Startet ab 09:30: …“ (erst ab
+  einer Minute Abstand, wie `commit`), sonst `errorDescription` mit orangem Hinweiszeichen.
+  `ambiguousProject`: Kandidaten als Kapseln; Klick ersetzt die passende Wortfolge (bis drei Wörter)
+  durch den vollen Projektnamen. **Enter** → `TaktStore.commit`; Erfolg leert das Feld und zeigt
+  2,5 s „Eingetragen: …“/„Gestartet: …“, Misserfolg den Fehler orange (statt Hinweisfenster).
+  **Esc** leert, ein zweites Esc gibt den Fokus ab. Ohne Projekte ausgeblendet.
+- **Tags:** Kapsel (`TagCapsule`, `.caption2`, `.fill.quaternary`) hinter dem Projektnamen jeder
+  Eintragszeile; die Farbkarte zeigt „seit 14:32 · Business · #Review“.
+- **Stopp-Popover:** zusätzlich „Tag“, vorbelegt mit dem Tag des laufenden Eintrags, darunter
+  Vorschläge (`TagSuggestionChips`). Geändertes Tag wird vor dem Stoppen per `updateEntry` am
+  laufenden Eintrag gesichert, dann `stop(nextStep:)` (der Store kennt kein Stoppen mit Tag).
+- **„Heute frei …“** oben rechts in der Pausenkarte (nur wenn nichts läuft); ist heute frei:
+  „Heute frei: Urlaub“. Öffnet das Sheet „Freie Tage“ mit heute vorausgewählt.
+
+**Eintrag bearbeiten:** Feld „Tag“, darunter klickbare Vorschläge aus
+`tagSuggestions(projectId:prefix:)` (zuerst des gewählten Projekts). Gespeichert wird ab dem
+Entwurf, damit `isBillable` erhalten bleibt (vorher ging es beim Sichern verloren).
+
+**Freie Tage** (`DaysOffSheet`/`DaysOffContent`): Monatsraster Mo–So mit Blättern. Klick auf einen
+Tag markiert ihn mit der zuletzt gewählten Art (Standard Urlaub); Klick auf einen freien Tag wählt
+ihn, ein erneuter Klick entfernt die Markierung. Darunter Art (Segment: Urlaub/Krank/Feiertag/
+Sonstiges, sofort gesichert) und Notiz (gesichert bei Enter, Tageswechsel oder „Fertig“). Farben je
+Art (Türkis, Pink, Orange, Grau) nur hier.
+
+**Berichte**
+- Kopfzeile: „Freie Tage …“ (bei knapper Breite nur das Sonnen-Symbol) öffnet das Sheet für den
+  Monat des Zeitraums (enthält er heute: den aktuellen).
+- **Wochenziel** (nur wenn `report.goal != nil`): schmale Zeile unter den Kennzahlen
+  „Wochenziel 24:26 von 32:00 (4 Arbeitstage) · noch 7:34 · 76 %“ mit Balken in der Akzentfarbe,
+  ab 100 % grün mit Häkchen. Ziel aus `AppSettings.weeklyGoal`, Neuladen bei Änderung.
+- **Diagramm:** freie Tage als schraffierte graue Spalte hinter den Balken (oben die Art, wenn die
+  Spalte breit genug ist), im Hinweis „Mittwoch, 21. Okt. · Urlaub“. Nur bei Tages-Balken.
+- **Fokus-Zeile:** „n Wechsel · längster Block · 4 Arbeitstage (1 frei) · Ø 7:05 pro Arbeitstag“;
+  beim einzelnen Tag ohne Ø, an freien Tagen „frei: Urlaub“, am Wochenende „kein Arbeitstag“.
+  Ein leerer freier Tag zeigt „Freier Tag · Urlaub“ samt Notiz.
+- **Projektzeile aufgeklappt:** zuerst „nach Tag“ (nur wenn es Tags gibt): je Tag Balken in
+  Projektfarbe mit Dauer, Anteil und Zahl der Einträge, „ohne Tag“ grau und immer zuletzt; darunter
+  die Einträge mit Tag-Kapsel vor der Notiz.
+- **CSV:** keine Spalte „Tag“ – `CSVExport.entries` liefert sie (noch) nicht; Ergänzung gehört in
+  TaktCore (`entryHeader` + Feld hinter „Notiz“).
+
+**Einstellungen › Abrechnung:** „Wochenziel (abrechenbare Stunden)“, leer = kein Ziel, Komma oder
+Punkt, gültig über 0 bis 168 (`SharedSettings.validWeeklyGoalHours`), Hinweis „Passt sich freien
+Tagen an: bei 4 Arbeitstagen gelten … h“.
+
 ## Fokus v2 (Leerlauf, Pomodoro) – Einstellungen
 
-Nur die Einstellungen und die Datenbasis; die Logik (Leerlauf-Erkennung, Pomodoro-Ablauf) folgt in
-`Takt/Focus/`.
+Einstellungen und Datenbasis; die Logik steht im folgenden Abschnitt „Fokus v2 – Leerlauf und
+Pomodoro“.
 
 | `AppSettings` | Standard | Bereich | Bedeutung |
 |---|---|---|---|
@@ -466,3 +517,62 @@ Werte außerhalb des Bereichs (z. B. per `defaults write`) fallen beim Start auf
 
 Bausteine im Store: `stop(at:nextStep:)` für „Leerlauf abziehen“ (Ende = Beginn des Leerlaufs),
 `discardRunning()` für eine abgebrochene Einheit, `start(projectId:tag:)`.
+
+## Fokus v2 – Leerlauf und Pomodoro
+
+### Leerlauf-Erkennung (`Takt/Focus/IdleDetector.swift`)
+- Aktiv nur bei laufendem Timer und `idleDetectionEnabled`. Alle 30 s
+  `CGEventSource.secondsSinceLastEventType(.combinedSessionState, kCGAnyInputEventType)`; ab
+  `idleMinutes` ohne Eingabe gilt der Zeitraum als Leerlauf, Beginn = jetzt − Leerlauf.
+- Ruhezustand (`NSWorkspace.willSleep`/`didWake`) und Bildschirmsperre
+  (`com.apple.screenIsLocked`/`screenIsUnlocked`) zählen als Leerlauf ab der letzten Eingabe davor;
+  Eingaben am Sperrbildschirm gelten nicht als Rückkehr.
+- Während eines Leerlaufs wird alle 2 s geprüft. Rückkehr = letzte Eingabe < 5 s her. Nachgefragt
+  wird nur, wenn derselbe Eintrag noch läuft und der Leerlauf innerhalb des Eintrags mindestens
+  `idleMinutes` lang war.
+- App aktiv → `NSAlert` (Sheet am Hauptfenster, sonst app-modal; andere Apps bleiben bedienbar):
+  „Du warst 23 Minuten inaktiv (seit 14:32).“ / „Was soll mit der Zeit passieren? …“
+  Knöpfe **Abziehen** (Standard), **Behalten** (Esc), **Bei Leerlauf stoppen**.
+- App nicht aktiv → Mitteilung „23 Min Leerlauf erkannt – klicken zum Entscheiden“ (Kategorie
+  `dev.eremiya.takt.idle`, Aktionen „Abziehen“/„Behalten“); Klick darauf holt Takt nach vorn und
+  zeigt den Alert. Verwerfen = Behalten.
+- **Abziehen:** Lücke < 2 min → nichts. Sonst `stop(at: idleStart)` und sofort Neustart mit
+  demselben Projekt und Tag (`start(projectId:tag:)`); der neue Eintrag beginnt mit dem Ende des
+  Leerlaufs (nicht erst mit der Antwort) und übernimmt eine abweichende Abrechenbarkeit → zwei
+  Einträge mit Lücke. Begann der Leerlauf schon mit dem Eintrag, wird nur dessen Beginn verschoben.
+- **Bei Leerlauf stoppen:** `stop(at: idleStart)`; deckt der Leerlauf den ganzen Eintrag ab,
+  `discardRunning()`.
+- Wurde der Timer inzwischen anderswo gestoppt oder gewechselt, bewirkt eine späte Antwort nichts.
+
+### Pomodoro (`Takt/Focus/PomodoroController.swift`)
+- Nur mit `pomodoroEnabled`. Zyklus: Arbeit (`pomodoroWorkMinutes`) → kurze Pause → … nach
+  `pomodoroCyclesBeforeLongBreak` Einheiten lange Pause, danach wieder Einheit 1.
+- Eine Arbeitseinheit beginnt mit dem Timer-Start (nichts läuft → läuft; Starts aus dem Widget
+  zählen ab Beginn des Eintrags, wenn er höchstens 5 min zurückliegt). Projektwechsel setzen sie
+  nicht zurück. Ein Stopp vor Ablauf bricht die Einheit ab (zählt nicht). Ein Timer-Start während
+  der Pause beendet die Pause und beginnt die nächste Einheit.
+- Ende der Arbeit: Mitteilung „Pomodoro: Pause (10 Min)“ bzw. „Pomodoro: lange Pause (20 Min)“ mit
+  Ton. Mit `pomodoroAutoStopTimer` wird der Timer gestoppt (Musik pausiert dann wie bei jedem
+  Stopp); kam das Ende verspätet (Ruhezustand), endet der Eintrag zum eigentlichen Ende.
+  Ohne automatischen Stopp nur der Hinweis; der Timer läuft durch die Pause.
+- Ende der Pause: ohne laufenden Timer Mitteilung „Pause vorbei – weiter mit <Projekt>?“
+  (Kategorie `dev.eremiya.takt.pomodoro-break-over`, Aktion „Weiter“ startet `lastUsedProject`)
+  und 2 s die Einblendung des Kurzbefehls. Läuft der Timer noch, beginnt die nächste Einheit sofort
+  („Pause vorbei“).
+- Ersetzt die Pausenerinnerung: `BreakReminder` plant bei `pomodoroEnabled` nichts; Ein- und
+  Ausschalten plant sie neu.
+- Menüleiste: Zusatz „· 🍅 23:00“ (Restzeit der Arbeit) bzw. „· Pause 07:00“; ohne laufenden Timer
+  in der Pause Tassen-Symbol + „Pause 07:00“. Restzeit in angefangenen Minuten, Aktualisierung
+  jeweils zur vollen Restminute.
+- Popover: unter der Karte „Pomodoro 2/4 · Arbeit · noch 23 min“ mit „Phase überspringen“ (Arbeit
+  endet sofort wie regulär, Pause endet ohne Mitteilung).
+- Zustand nur im Speicher; ein App-Neustart beginnt mit Einheit 1 (läuft beim Start ein Timer,
+  beginnt die Einheit mit dessen Beginn, sofern der innerhalb einer Einheitslänge liegt).
+
+### Mitteilungen
+- `NotificationCategories.register()` registriert beim App-Start alle Kategorien auf einmal
+  (Pausenerinnerung, geplanter Block, vergessener Timer, Leerlauf, Pomodoro) – kein Lesen-und-Ergänzen
+  mehr in einzelnen Klassen, damit keine Kategorie verloren geht.
+- Antworten laufen weiter über das Delegate von `BreakReminder`, das Mitteilungen von
+  `ForgottenTimerGuard`, `IdleDetector` und `PomodoroController` an diese weiterreicht.
+- Log-Kategorie `focus`.

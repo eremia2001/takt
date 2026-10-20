@@ -37,7 +37,7 @@ final class ForgottenTimerGuard {
         self.store = store
         self.settings = settings
         Self.current = self
-        registerCategory()
+        // Die Kategorie mit den Aktionen registriert `NotificationCategories.register()` beim App-Start.
 
         let timer = Timer(timeInterval: Self.checkInterval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.check() }
@@ -163,29 +163,11 @@ final class ForgottenTimerGuard {
 
     private enum ID {
         static let request = "dev.eremiya.takt.forgotten-timer"
-        static let category = "dev.eremiya.takt.forgotten-timer"
-        static let keepRunning = "forgotten.keep-running"
-        static let stopNow = "forgotten.stop-now"
-        static let stopAt = "forgotten.stop-at"
+        static let category = NotificationCategories.ForgottenTimer.category
+        static let keepRunning = NotificationCategories.ForgottenTimer.keepRunning
+        static let stopNow = NotificationCategories.ForgottenTimer.stopNow
+        static let stopAt = NotificationCategories.ForgottenTimer.stopAt
         static let entryKey = "entryId"
-    }
-
-    private func registerCategory() {
-        // Vorhandene Kategorien anderer Teile der App nicht überschreiben.
-        UNUserNotificationCenter.current().getNotificationCategories { existing in
-            let category = UNNotificationCategory(
-                identifier: ID.category,
-                actions: [
-                    UNNotificationAction(identifier: ID.keepRunning, title: "Läuft weiter"),
-                    UNNotificationAction(identifier: ID.stopNow, title: "Jetzt stoppen"),
-                    UNNotificationAction(identifier: ID.stopAt, title: "Stoppen um …", options: [.foreground]),
-                ],
-                intentIdentifiers: []
-            )
-            var categories = existing.filter { $0.identifier != ID.category }
-            categories.insert(category)
-            UNUserNotificationCenter.current().setNotificationCategories(categories)
-        }
     }
 
     private func postNotification(for running: RunningState, now: Date) {

@@ -20,6 +20,7 @@ struct EntryEditor: View {
     @State private var startedAt: Date
     @State private var endedAt: Date
     @State private var nextStep: String
+    @State private var tag: String
     @State private var errorMessage: String?
     @State private var isDeleteConfirmationShown = false
 
@@ -29,6 +30,7 @@ struct EntryEditor: View {
         _startedAt = State(initialValue: draft.entry.startedAt)
         _endedAt = State(initialValue: draft.entry.endedAt ?? .now)
         _nextStep = State(initialValue: draft.entry.nextStep ?? "")
+        _tag = State(initialValue: draft.entry.tag ?? "")
     }
 
     /// Ein laufender Eintrag behält sein offenes Ende.
@@ -52,6 +54,14 @@ struct EntryEditor: View {
                 }
 
                 TextField("Nächster Schritt", text: $nextStep, prompt: Text("optional"))
+
+                TextField("Tag", text: $tag, prompt: Text("optional, z. B. Meeting"))
+                // Vorschläge: zuerst Tags dieses Projekts, zuletzt genutzte zuerst; Klick übernimmt.
+                let suggestions = store.tagSuggestions(projectId: projectId, prefix: tag)
+                if !TagSuggestionChips.visible(suggestions, text: tag).isEmpty {
+                    TagSuggestionChips(text: $tag, suggestions: suggestions)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                }
 
                 if let validationMessage {
                     Text(validationMessage)
@@ -108,13 +118,13 @@ struct EntryEditor: View {
 
     private func save() {
         let trimmed = nextStep.trimmingCharacters(in: .whitespacesAndNewlines)
-        let entry = TimeEntry(
-            id: draft.entry.id,
-            projectId: projectId,
-            startedAt: startedAt,
-            endedAt: isRunning ? nil : endedAt,
-            nextStep: trimmed.isEmpty ? nil : trimmed
-        )
+        // Vom Entwurf ausgehen, damit Felder ohne Eingabe hier (z. B. „abrechenbar“) erhalten bleiben.
+        var entry = draft.entry
+        entry.projectId = projectId
+        entry.startedAt = startedAt
+        entry.endedAt = isRunning ? nil : endedAt
+        entry.nextStep = trimmed.isEmpty ? nil : trimmed
+        entry.tag = TimeEntry.normalizedTag(tag)
         let success = draft.isNew ? store.addEntry(entry) : store.updateEntry(entry)
         finish(success)
     }

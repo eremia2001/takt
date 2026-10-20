@@ -14,8 +14,15 @@ struct TaktApp: App {
     @State private var menuBarController: MenuBarController
     /// Nachfrage bei vergessenem Timer; lebt so lange wie die App.
     @State private var forgottenTimerGuard: ForgottenTimerGuard
+    /// Leerlauf-Erkennung bei laufendem Timer; lebt so lange wie die App.
+    @State private var idleDetector: IdleDetector
+    /// Pomodoro-Ablauf (Menüleiste, Mitteilungen); lebt so lange wie die App.
+    @State private var pomodoroController: PomodoroController
 
     init() {
+        // Alle Mitteilungs-Kategorien in einem Rutsch (Pause, geplanter Block, vergessener Timer,
+        // Leerlauf, Pomodoro) – vor allem, was Mitteilungen plant.
+        NotificationCategories.register()
         let settings = AppSettings()
         let musicController = MusicController(settings: settings)
         let breakReminder = BreakReminder(settings: settings, musicController: musicController)
@@ -27,8 +34,13 @@ struct TaktApp: App {
         _musicController = State(initialValue: musicController)
         _breakReminder = State(initialValue: breakReminder)
         _store = State(initialValue: store)
-        _menuBarController = State(initialValue: MenuBarController(store: store, settings: settings))
+        let menuBarController = MenuBarController(store: store, settings: settings)
+        _menuBarController = State(initialValue: menuBarController)
         _forgottenTimerGuard = State(initialValue: ForgottenTimerGuard(store: store, settings: settings))
+        _idleDetector = State(initialValue: IdleDetector(store: store, settings: settings))
+        _pomodoroController = State(initialValue: PomodoroController(
+            store: store, settings: settings, breakReminder: breakReminder, menuBar: menuBarController
+        ))
     }
 
     var body: some Scene {
@@ -61,6 +73,7 @@ struct TaktApp: App {
                 .environment(musicController)
                 .environment(breakReminder)
                 .environment(menuBarController)
+                .environment(pomodoroController)
         }
 
         // Fenster-Stil statt Menü: eigene ruhige Oberfläche wie in der App.
@@ -69,10 +82,12 @@ struct TaktApp: App {
                 .environment(store)
                 .environment(settings)
                 .environment(menuBarController)
+                .environment(pomodoroController)
         } label: {
             MenuBarLabel()
                 .environment(store)
                 .environment(menuBarController)
+                .environment(pomodoroController)
         }
         .menuBarExtraStyle(.window)
     }

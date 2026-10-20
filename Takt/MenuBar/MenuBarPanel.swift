@@ -32,6 +32,14 @@ struct MenuBarPanelData {
     /// Tagessumme inklusive laufendem Eintrag.
     var todayTotal: TimeInterval
     var now: Date
+    /// Pomodoro-Zeile unter der Karte; `nil` ohne laufende Pomodoro-Phase.
+    var pomodoro: PomodoroItem? = nil
+
+    struct PomodoroItem: Equatable {
+        /// z. B. „Pomodoro 2/4 · Arbeit · noch 23 min“.
+        let text: String
+        let isBreak: Bool
+    }
 }
 
 struct MenuBarPanelActions {
@@ -40,6 +48,7 @@ struct MenuBarPanelActions {
     var openApp: () -> Void = {}
     var openSettings: () -> Void = {}
     var quit: () -> Void = {}
+    var skipPomodoroPhase: () -> Void = {}
 }
 
 struct MenuBarPanel: View {
@@ -62,6 +71,12 @@ struct MenuBarPanel: View {
             }
             .padding(.horizontal, 10)
             .padding(.top, 10)
+
+            if let pomodoro = data.pomodoro {
+                MenuBarPomodoroRow(item: pomodoro, theme: theme, skip: actions.skipPomodoroPhase)
+                    .padding(.horizontal, 10)
+                    .padding(.top, 8)
+            }
 
             MenuBarProjectList(data: data, theme: theme, start: actions.start)
                 .padding(.top, 10)
@@ -167,6 +182,53 @@ private struct MenuBarIdleCard: View {
         .frame(height: 118)
         .background(theme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(theme.hairline, lineWidth: 1))
+    }
+}
+
+// MARK: - Pomodoro
+
+/// Zeile unter der Karte: „Pomodoro 2/4 · Arbeit · noch 23 min“ und Knopf „Phase überspringen“
+/// (als Symbol, weil der Text sonst in 300 pt nicht ganz passt; Name als Hilfe und für VoiceOver).
+private struct MenuBarPomodoroRow: View {
+    let item: MenuBarPanelData.PomodoroItem
+    let theme: DesignTheme
+    let skip: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Image(systemName: item.isBreak ? "cup.and.saucer" : "timer")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 14)
+            Text(item.text)
+                .font(.system(size: 11.5, weight: .medium))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .layoutPriority(1)
+            Spacer(minLength: 4)
+            Button(action: skip) {
+                Image(systemName: "forward.end.fill")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(isHovered ? .primary : .secondary)
+                    .frame(width: 24, height: 22)
+                    .background(isHovered ? theme.track : .clear, in: Capsule())
+                    .overlay(Capsule().stroke(theme.hairline, lineWidth: 1))
+                    .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .onHover { isHovered = $0 }
+            .help("Phase überspringen")
+            .accessibilityLabel("Phase überspringen")
+        }
+        .padding(.leading, 10)
+        .padding(.trailing, 6)
+        .frame(height: 32)
+        .background(theme.surface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(theme.hairline, lineWidth: 1))
     }
 }
 

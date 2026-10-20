@@ -16,13 +16,19 @@ struct ReportsHeader: View {
             HStack(spacing: 14) {
                 periodControls
                 Spacer(minLength: 12)
-                trailing
+                trailing(compact: false)
+            }
+            // Etwas schmaler: „Freie Tage“ nur als Symbol, alles bleibt in einer Zeile.
+            HStack(spacing: 10) {
+                periodControls
+                Spacer(minLength: 4)
+                trailing(compact: true)
             }
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 14) {
                     ReportsKindPicker(selection: kindBinding, theme: theme)
                     Spacer(minLength: 12)
-                    trailing
+                    trailing(compact: false)
                 }
                 HStack(spacing: 14) {
                     navigation
@@ -152,8 +158,25 @@ struct ReportsHeader: View {
 
     // MARK: Rechts
 
-    private var trailing: some View {
-        HStack(spacing: 8) {
+    private func trailing(compact: Bool) -> some View {
+        HStack(spacing: compact ? 6 : 8) {
+            Button(action: actions.editDaysOff) {
+                if compact {
+                    Image(systemName: "sun.max")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 28, height: 28)
+                        .overlay(Circle().strokeBorder(theme.hairline, lineWidth: 1))
+                        .contentShape(Circle())
+                } else {
+                    pillLabel("Freie Tage …", systemImage: "sun.max")
+                }
+            }
+            .buttonStyle(.plain)
+            .fixedSize()
+            .help("Freie Tage: Urlaub, Krankheit und Feiertage eintragen – sie zählen nicht als Arbeitstage")
+            .accessibilityLabel("Freie Tage")
+
             Menu {
                 Button("Einträge als CSV …", action: actions.exportEntries)
                 Button("Zusammenfassung als CSV …", action: actions.exportSummary)

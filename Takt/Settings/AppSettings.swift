@@ -37,7 +37,7 @@ final class AppSettings {
     var breakReminderEnabled: Bool {
         didSet {
             defaults.set(breakReminderEnabled, forKey: Key.breakReminderEnabled)
-            SharedSettings.breakReminderEnabled = breakReminderEnabled
+            SharedSettings.breakReminderEnabled = breakReminderEnabled && !pomodoroEnabled
             if breakReminderEnabled != oldValue { WidgetCenter.shared.reloadAllTimelines() }
         }
     }
@@ -61,7 +61,14 @@ final class AppSettings {
     /// Minuten ohne Tastatur/Maus, ab denen Leerlauf gilt (1–120, Standard 10).
     var idleMinutes: Int { didSet { defaults.set(idleMinutes, forKey: Key.idleMinutes) } }
     /// Pomodoro-Modus eingeschaltet.
-    var pomodoroEnabled: Bool { didSet { defaults.set(pomodoroEnabled, forKey: Key.pomodoroEnabled) } }
+    var pomodoroEnabled: Bool {
+        didSet {
+            defaults.set(pomodoroEnabled, forKey: Key.pomodoroEnabled)
+            // Bei aktivem Pomodoro zeigt das Widget keinen Pausenfortschritt der normalen Erinnerung.
+            SharedSettings.breakReminderEnabled = breakReminderEnabled && !pomodoroEnabled
+            if pomodoroEnabled != oldValue { WidgetCenter.shared.reloadAllTimelines() }
+        }
+    }
     /// Länge einer Arbeitseinheit in Minuten (5–180, Standard 50).
     var pomodoroWorkMinutes: Int {
         didSet { defaults.set(pomodoroWorkMinutes, forKey: Key.pomodoroWorkMinutes) }
@@ -283,7 +290,7 @@ final class AppSettings {
             .flatMap { SharedSettings.validWeeklyGoalHours($0.doubleValue) }
 
         // `didSet` greift in `init` nicht: Pausenerinnerung und Wochenziel einmal beim Start für das Widget spiegeln.
-        SharedSettings.breakReminderEnabled = breakReminderEnabled
+        SharedSettings.breakReminderEnabled = breakReminderEnabled && !pomodoroEnabled
         SharedSettings.breakReminderMinutes = breakReminderMinutes
         SharedSettings.weeklyGoalHours = weeklyGoalHours
     }

@@ -253,10 +253,11 @@ struct ReportV3Tests {
 
         let report = try f.db.report(for: week, rounding: .none, now: date(2026, 10, 25), calendar: deCalendar)
         let alpha = try #require(report.rows.first { $0.project.id == f.alpha.id })
+        // „ohne Tag“ steht immer zuletzt, auch wenn es die längste Dauer hat.
         #expect(alpha.byTag == [
-            TagReportRow(tag: nil, duration: 2 * hour, entryCount: 1),
             TagReportRow(tag: "Bugfix", duration: 90 * minute, entryCount: 1),
             TagReportRow(tag: "Meeting", duration: 90 * minute, entryCount: 2),
+            TagReportRow(tag: nil, duration: 2 * hour, entryCount: 1),
         ])
         let beta = try #require(report.rows.first { $0.project.id == f.beta.id })
         #expect(beta.byTag == [TagReportRow(tag: "Review", duration: 45 * minute, entryCount: 1)])

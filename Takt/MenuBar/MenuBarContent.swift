@@ -6,13 +6,15 @@ import TaktCore
 struct MenuBarContent: View {
     @Environment(TaktStore.self) private var store
     @Environment(MenuBarController.self) private var controller
+    @Environment(PomodoroController.self) private var pomodoro
     @Environment(\.openSettings) private var openSettings
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         // Minütlich neu zeichnen, solange das Fenster offen ist; keine Sekunden.
         TimelineView(.everyMinute) { context in
-            MenuBarPanel(data: data(at: max(context.date, controller.now)), actions: actions)
+            // `pomodoro.tick` folgt den Restminuten der Pomodoro-Phase.
+            MenuBarPanel(data: data(at: max(context.date, controller.now, pomodoro.tick)), actions: actions)
         }
         .onAppear { store.refresh() }
     }
@@ -25,7 +27,10 @@ struct MenuBarContent: View {
             running: running,
             projects: store.projects.map { item($0, now: now) },
             todayTotal: store.todayTotal(at: now),
-            now: now
+            now: now,
+            pomodoro: pomodoro.panelLine(at: now).map { line in
+                MenuBarPanelData.PomodoroItem(text: line, isBreak: pomodoro.phase?.isBreak ?? false)
+            }
         )
     }
 
@@ -49,7 +54,8 @@ struct MenuBarContent: View {
                 NSApp.activate()
                 openSettings()
             },
-            quit: { NSApp.terminate(nil) }
+            quit: { NSApp.terminate(nil) },
+            skipPomodoroPhase: { pomodoro.skipPhase() }
         )
     }
 }
@@ -58,20 +64,32 @@ struct MenuBarContent: View {
 struct MenuBarLabel: View {
     @Environment(TaktStore.self) private var store
     @Environment(MenuBarController.self) private var controller
+    @Environment(PomodoroController.self) private var pomodoro
 
     /// Längere Namen kürzen, damit die Menüleiste nicht vollläuft.
     private static let maxNameLength = 22
 
     var body: some View {
+        // Pomodoro-Restzeit („· 🍅 23:00“ bzw. „· Pause 07:00“); `pomodoro.tick` tickt zur vollen Restminute.
+        let pomodoroSuffix = pomodoro.menuBarSuffix(at: max(controller.now, pomodoro.tick, .now))
         if let running = store.running {
             // `controller.now` tickt minütlich und löst das Neuzeichnen aus.
             let duration = running.entry.duration(at: max(controller.now, .now))
             HStack(spacing: 5) {
                 Image(nsImage: Self.dot(hex: running.project.colorHex))
-                Text("\(Self.shortened(running.project.name)) · \(DurationFormat.hourMinute(duration))")
+                Text("\(Self.shortened(running.project.name)) · \(DurationFormat.hourMinute(duration))"
+                     + (pomodoroSuffix.map { " · \($0)" } ?? ""))
                     .monospacedDigit()
             }
             .accessibilityLabel("\(running.project.name) läuft seit \(DurationFormat.hourMinute(duration))")
+        } else if let pomodoroSuffix {
+            // Pomodoro-Pause bei gestopptem Timer.
+            HStack(spacing: 5) {
+                Image(systemName: "cup.and.saucer")
+                Text(pomodoroSuffix)
+                    .monospacedDigit()
+            }
+            .accessibilityLabel("Takt – \(pomodoroSuffix)")
         } else {
             Image(systemName: "circle.dotted")
                 .accessibilityLabel("Takt – nichts läuft")

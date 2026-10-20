@@ -9,9 +9,10 @@ final class HotKeyOverlay {
     private var hideTask: Task<Void, Never>?
 
     /// Sichtbare Dauer ohne Ein- und Ausblenden.
-    private static let visibleDuration: Duration = .milliseconds(1500)
+    nonisolated static let visibleDuration: Duration = .milliseconds(1500)
 
-    func show(_ message: HotKeyOverlayMessage) {
+    /// `visibleFor`: sichtbare Dauer, Standard 1,5 s (Pomodoro nutzt 2 s).
+    func show(_ message: HotKeyOverlayMessage, visibleFor duration: Duration = HotKeyOverlay.visibleDuration) {
         let panel = panel ?? makePanel()
         self.panel = panel
 
@@ -31,7 +32,7 @@ final class HotKeyOverlay {
         }
 
         hideTask = Task { [weak self] in
-            try? await Task.sleep(for: Self.visibleDuration)
+            try? await Task.sleep(for: duration)
             guard !Task.isCancelled else { return }
             self?.fadeOut()
         }
@@ -82,7 +83,7 @@ final class HotKeyOverlay {
 
 /// Inhalt der Rückmeldung.
 struct HotKeyOverlayMessage {
-    enum Kind { case started, stopped, info }
+    enum Kind { case started, stopped, info, pomodoro }
 
     var kind: Kind
     var text: String
@@ -109,6 +110,10 @@ struct HotKeyOverlayView: View {
                 Image(systemName: "info.circle")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.secondary)
+            case .pomodoro:
+                Image(systemName: "timer")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(color)
             }
             Text(message.text)
                 .font(.system(size: 13, weight: .medium))

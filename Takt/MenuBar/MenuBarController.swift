@@ -102,6 +102,11 @@ final class MenuBarController {
         now = .now
     }
 
+    /// Kurze Einblendung wie beim Kurzbefehl, z. B. „Pause vorbei“ vom Pomodoro.
+    func showOverlay(_ message: HotKeyOverlayMessage, visibleFor duration: Duration = HotKeyOverlay.visibleDuration) {
+        overlay.show(message, visibleFor: duration)
+    }
+
     // MARK: Fenster
 
     /// Holt das Hauptfenster nach vorn. `openWindow` öffnet es neu, falls es geschlossen wurde.

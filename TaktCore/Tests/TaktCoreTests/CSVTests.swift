@@ -28,12 +28,12 @@ struct CSVExportTests {
         let csv = CSVExport.entries(entries, projects: [alpha, garden], rounding: .minutes6, calendar: testCalendar)
         let rows = lines(csv)
         #expect(rows.count == 4)  // Kopf + 3 Einträge (einer ohne Projekt fehlt)
-        #expect(rows[0] == "Datum;Start;Ende;Dauer (h:mm);Dauer (dezimal);Projekt;Kunde;Business/Privat;Abrechenbar;Stundensatz;Betrag;Notiz")
+        #expect(rows[0] == "Datum;Start;Ende;Dauer (h:mm);Dauer (dezimal);Projekt;Kunde;Business/Privat;Abrechenbar;Stundensatz;Betrag;Notiz;Tag")
         // 87 min → 90 min = 1,50 h × 92,50 = 138,75
-        #expect(rows[1] == "20.10.2026;09:05;10:32;1:27;1,50;Kundenportal;\"ACME; Söhne\";Business;ja;92,50;138,75;\"Login \"\"SSO\"\" fertig\nDann Tests\"")
+        #expect(rows[1] == "20.10.2026;09:05;10:32;1:27;1,50;Kundenportal;\"ACME; Söhne\";Business;ja;92,50;138,75;\"Login \"\"SSO\"\" fertig\nDann Tests\";")
         // nicht abrechenbar: Satz sichtbar, kein Betrag
-        #expect(rows[2] == "20.10.2026;11:00;11:10;0:10;0,20;Kundenportal;\"ACME; Söhne\";Business;nein;92,50;;")
-        #expect(rows[3] == "20.10.2026;14:00;14:40;0:40;0,70;Garten;;Privat;nein;;;")
+        #expect(rows[2] == "20.10.2026;11:00;11:10;0:10;0,20;Kundenportal;\"ACME; Söhne\";Business;nein;92,50;;;")
+        #expect(rows[3] == "20.10.2026;14:00;14:40;0:40;0,70;Garten;;Privat;nein;;;;")
     }
 
     @Test("Laufender Eintrag: Ende leer, Dauer bis now; Standard-Stundensatz")
@@ -44,7 +44,7 @@ struct CSVExportTests {
             [entry], projects: [project], rounding: .none, calendar: testCalendar,
             defaultHourlyRate: 60, now: date(2026, 10, 20, 9, 45)
         )
-        #expect(lines(csv)[1] == "20.10.2026;09:00;;0:45;0,75;P;;Business;ja;60,00;45,00;")
+        #expect(lines(csv)[1] == "20.10.2026;09:00;;0:45;0,75;P;;Business;ja;60,00;45,00;;")
     }
 
     @Test("Escaping")

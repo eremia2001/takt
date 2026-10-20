@@ -505,6 +505,12 @@ extension AppDatabase {
     private static func tagRows(_ tags: [String?: (duration: TimeInterval, count: Int)]) -> [TagReportRow] {
         tags.map { TagReportRow(tag: $0.key, duration: $0.value.duration, entryCount: $0.value.count) }
             .sorted { a, b in
+                // „ohne Tag“ steht unabhängig von der Dauer immer zuletzt.
+                switch (a.tag, b.tag) {
+                case (_?, nil): return true
+                case (nil, _?): return false
+                default: break
+                }
                 if a.duration != b.duration { return a.duration > b.duration }
                 switch (a.tag, b.tag) {
                 case let (x?, y?): return x.localizedStandardCompare(y) == .orderedAscending

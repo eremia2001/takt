@@ -14,6 +14,7 @@ struct ReportsView: View {
     @State private var notice: String?
     @State private var noticeID = 0
     @State private var isImportShown = false
+    @State private var isDaysOffShown = false
     /// Erst beim Erscheinen angelegt, damit nicht jede Neuerzeugung der View einen Beobachter registriert.
     @State private var changes: ReportsChangeMonitor?
 
@@ -36,10 +37,14 @@ struct ReportsView: View {
         .onChange(of: settings.rounding) { reload() }
         .onChange(of: settings.defaultHourlyRate) { reload() }
         .onChange(of: settings.currencyCode) { reload() }
+        .onChange(of: settings.weeklyGoalHours) { reload() }
         .onChange(of: changes?.revision) { reload() }
         .onChange(of: store.running) { reload() }
         .sheet(isPresented: $isImportShown, onDismiss: { reload() }) {
             TogglImportSheet()
+        }
+        .sheet(isPresented: $isDaysOffShown, onDismiss: { reload() }) {
+            DaysOffSheet(month: daysOffMonth)
         }
     }
 
@@ -52,7 +57,8 @@ struct ReportsView: View {
             actions: ReportsActions(
                 exportEntries: { export(.entries) },
                 exportSummary: { export(.summary) },
-                importToggl: { isImportShown = true }
+                importToggl: { isImportShown = true },
+                editDaysOff: { isDaysOffShown = true }
             )
         )
     }
@@ -64,6 +70,7 @@ struct ReportsView: View {
             for: period,
             rounding: settings.rounding,
             defaultHourlyRate: settings.defaultHourlyRate,
+            weeklyGoal: settings.weeklyGoal,
             now: now
         ) else { return }
         let entries = store.entries(in: report.interval).sorted { $0.startedAt < $1.startedAt }
@@ -74,6 +81,12 @@ struct ReportsView: View {
             currencyCode: settings.currencyCode,
             now: now
         )
+    }
+
+    /// Monat für „Freie Tage“: enthält der Zeitraum heute, der heutige, sonst der seines Anfangs.
+    private var daysOffMonth: Date {
+        let interval = period.interval(calendar: .current)
+        return interval.contains(.now) ? .now : interval.start
     }
 
     // MARK: Export

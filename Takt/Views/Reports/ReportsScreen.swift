@@ -3,9 +3,9 @@ import TaktCore
 
 // Ansicht „Berichte“ in der Formensprache von „Heute“. Von oben nach unten:
 //   Kopfzeile: Tag · Woche · Monat · Zeitraum, Blättern, Titel; rechts Export und Toggl-Import.
-//   Kennzahlen: Gesamt · Business/Privat · Abrechenbar · Umsatz.
-//   Verlauf: gestapelte Balken in Projektfarben, Fokus-Kennzahlen darüber (wie die Tagesleiste).
-//   Projekte: Tabelle mit Summenzeile, Zeilen klappen ihre Einträge auf.
+//   Kennzahlen: Gesamt · Business/Privat · Abrechenbar · Umsatz; in der Woche ggf. Wochenziel.
+//   Verlauf: gestapelte Balken in Projektfarben, freie Tage schraffiert, Fokus-Kennzahlen darüber.
+//   Projekte: Tabelle mit Summenzeile, Zeilen klappen Aufschlüsselung nach Tag und Einträge auf.
 // Rein darstellend: Daten kommen als `ReportsData`, Aktionen als `ReportsActions`.
 
 struct ReportsScreen: View {
@@ -39,8 +39,8 @@ struct ReportsScreen: View {
                         .padding(.bottom, 24)
                 }
                 .scrollIndicators(.automatic)
-            } else if data != nil {
-                emptyState
+            } else if let data {
+                emptyState(data)
             } else {
                 Spacer(minLength: 0)
             }
@@ -95,17 +95,29 @@ struct ReportsScreen: View {
         }
     }
 
-    /// „n Wechsel · längster Block h:mm · aktive Tage n · Ø h:mm pro Tag“ – bewusst leise.
+    /// „n Wechsel · längster Block h:mm · n Arbeitstage (1 frei) · Ø h:mm pro Arbeitstag“ –
+    /// bewusst leise. Arbeitstage = Mo–Fr ohne freie Tage; beim einzelnen Tag ohne Ø.
     private func focusLine(_ data: ReportsData) -> some View {
         let report = data.report
+        var isDay = false
+        if case .day = report.period { isDay = true }
+        let freeCount = report.daysOff.count
         return HStack(spacing: 8) {
             Text("\(report.focus.switches) Wechsel")
             Text("·")
             Text("längster Block \(ReportsFormat.duration(report.focus.longestBlock))")
-            Text("·")
-            Text("aktive Tage \(report.activeDays)")
-            Text("·")
-            Text("Ø \(ReportsFormat.duration(report.averagePerActiveDay)) pro Tag")
+            if !isDay || freeCount > 0 || report.workdays == 0 {
+                Text("·")
+                if isDay, let dayOff = report.daysOff.first {
+                    Text("frei: \(dayOff.kind.title)")
+                } else {
+                    Text(ReportsFormat.workdays(report.workdays) + (freeCount > 0 ? " (\(freeCount) frei)" : ""))
+                }
+            }
+            if !isDay, report.workdays > 0 {
+                Text("·")
+                Text("Ø \(ReportsFormat.duration(report.averagePerWorkday)) pro Arbeitstag")
+            }
         }
         .font(.system(size: 12, weight: .medium))
         .foregroundStyle(theme.tertiary)
@@ -114,14 +126,28 @@ struct ReportsScreen: View {
         .minimumScaleFactor(0.8)
     }
 
-    private var emptyState: some View {
-        VStack(spacing: 6) {
-            Image(systemName: "chart.bar")
+    /// Leerer Zeitraum; ein einzelner freier Tag sagt, warum („Freier Tag · Urlaub“).
+    private func emptyState(_ data: ReportsData) -> some View {
+        var dayOff: DayOff?
+        if case .day = data.report.period { dayOff = data.report.daysOff.first }
+        return VStack(spacing: 6) {
+            Image(systemName: dayOff == nil ? "chart.bar" : "sun.max")
                 .font(.system(size: 22, weight: .regular))
                 .foregroundStyle(theme.tertiary)
-            Text("Keine Einträge in diesem Zeitraum")
-                .font(.system(size: 13))
-                .foregroundStyle(.secondary)
+            if let dayOff {
+                Text("Freier Tag · \(dayOff.kind.title)")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary)
+                if let note = dayOff.note {
+                    Text(note)
+                        .font(.system(size: 12))
+                        .foregroundStyle(theme.tertiary)
+                }
+            } else {
+                Text("Keine Einträge in diesem Zeitraum")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.bottom, 40)

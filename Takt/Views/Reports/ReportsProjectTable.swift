@@ -1,8 +1,8 @@
 import SwiftUI
 import TaktCore
 
-/// Tabelle je Projekt mit Summenzeile. Ein Klick auf eine Zeile klappt die Einträge
-/// des Projekts im Zeitraum auf.
+/// Tabelle je Projekt mit Summenzeile. Ein Klick auf eine Zeile klappt die Aufschlüsselung
+/// nach Tag (sofern Tags vergeben sind) und die Einträge des Projekts im Zeitraum auf.
 struct ReportsProjectTable: View {
     let data: ReportsData
     let theme: DesignTheme
@@ -158,6 +158,11 @@ struct ReportsProjectTable: View {
     private func entryRows(for row: ProjectReportRow) -> some View {
         let entries = data.entries(for: row.project.id)
         return VStack(alignment: .leading, spacing: 0) {
+            if data.hasTags(row) {
+                tagBreakdown(row)
+                    .padding(.top, 4)
+                    .padding(.bottom, 10)
+            }
             ForEach(entries) { entry in
                 HStack(alignment: .firstTextBaseline, spacing: 12) {
                     Text(ReportsFormat.shortDay(entry.startedAt, calendar: data.calendar))
@@ -174,6 +179,9 @@ struct ReportsProjectTable: View {
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(Color(hex: row.project.colorHex))
                     }
+                    if let tag = entry.tag {
+                        TagCapsule(tag: tag)
+                    }
                     Text(entry.nextStep ?? "")
                         .foregroundStyle(theme.tertiary)
                         .lineLimit(1)
@@ -188,6 +196,52 @@ struct ReportsProjectTable: View {
         .padding(.leading, 17)
         .padding(.top, 2)
         .padding(.bottom, 10)
+    }
+
+    /// „nach Tag“: je Tag ein Balken mit Anteil an der Projektzeit; „ohne Tag“ grau und zuletzt.
+    private func tagBreakdown(_ row: ProjectReportRow) -> some View {
+        let color = Color(hex: row.project.colorHex)
+        let total = max(1, row.byTag.reduce(0) { $0 + $1.duration })
+        return VStack(alignment: .leading, spacing: 4) {
+            Text("nach Tag")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(theme.tertiary)
+            // „ohne Tag“ immer zuletzt, auch wenn es mehr Zeit ist als einzelne Tags.
+            ForEach(row.byTag.filter { $0.tag != nil } + row.byTag.filter { $0.tag == nil }, id: \.tag) { tagRow in
+                let share = tagRow.duration / total
+                HStack(spacing: 12) {
+                    Text(tagRow.tag ?? "ohne Tag")
+                        .font(.system(size: 12, weight: tagRow.tag == nil ? .regular : .medium))
+                        .foregroundStyle(tagRow.tag == nil ? AnyShapeStyle(theme.tertiary) : AnyShapeStyle(.primary))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(width: 108, alignment: .leading)
+                    GeometryReader { geo in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(theme.track)
+                            Capsule()
+                                .fill(tagRow.tag == nil ? AnyShapeStyle(Color.secondary.opacity(0.45)) : AnyShapeStyle(color))
+                                .frame(width: max(4, geo.size.width * share))
+                        }
+                    }
+                    .frame(width: 160, height: 6)
+                    Text(ReportsFormat.duration(tagRow.duration))
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .frame(width: 40, alignment: .trailing)
+                    Text(ReportsFormat.percent(share))
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 40, alignment: .trailing)
+                    Text(tagRow.entryCount == 1 ? "1 Eintrag" : "\(tagRow.entryCount) Einträge")
+                        .font(.system(size: 11))
+                        .foregroundStyle(theme.tertiary)
+                    Spacer(minLength: 0)
+                }
+                .monospacedDigit()
+                .frame(height: 18)
+                .accessibilityElement(children: .combine)
+            }
+        }
     }
 
     // MARK: Summe
