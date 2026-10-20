@@ -66,8 +66,8 @@ public final class AppDatabase: Sendable {
         return config
     }
 
-    /// Alle Migrationen. `internal`, damit Tests eine v1-Datenbank aufbauen können
-    /// (`migrator.migrate(writer, upTo: "v1")`).
+    /// Alle Migrationen. `internal`, damit Tests ältere Stände aufbauen können
+    /// (`migrator.migrate(writer, upTo: "v1")` bzw. `"v2"`).
     static var migrator: DatabaseMigrator {
         // Bewusst ohne `eraseDatabaseOnSchemaChange`: echte Zeitdaten nie automatisch löschen.
         var migrator = DatabaseMigrator()
@@ -121,6 +121,24 @@ public final class AppDatabase: Sendable {
             try db.alter(table: "timeEntry") { t in
                 // NULL = Abrechenbarkeit vom Projekt erben.
                 t.add(column: "isBillable", .boolean)
+            }
+        }
+
+        // v3: Stundenbudget je Projekt und der geplante „nächste Block“ (Widget v2).
+        migrator.registerMigration("v3") { db in
+            try db.alter(table: "project") { t in
+                // Stunden als TEXT in POSIX-Schreibweise wie `hourlyRate`; NULL = kein Budget.
+                t.add(column: "budgetHours", .text)
+            }
+            try db.create(table: "plannedBlock") { t in
+                t.primaryKey("id", .blob)
+                t.column("projectId", .blob)
+                    .notNull()
+                    .indexed()
+                    .references("project", column: "id", onDelete: .cascade)
+                t.column("startAt", .double).notNull().indexed()  // Sekunden seit 2001
+                t.column("note", .text)
+                t.column("createdAt", .double).notNull()
             }
         }
 

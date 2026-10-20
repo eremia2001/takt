@@ -58,6 +58,14 @@ struct TodayView: View {
             resume = TodayData.Resume(project: item(last), nextStep: store.lastNextSteps[last.id])
         }
 
+        // Geplanter Block: abgelaufene (mehr als 4 h nach Beginn) ausblenden, auch ohne neues Laden.
+        var planned: TodayData.PlannedItem?
+        if let block = store.plannedBlock,
+           block.startAt >= now.addingTimeInterval(-AppDatabase.plannedBlockGrace),
+           let project = store.project(id: block.projectId), !project.isArchived {
+            planned = TodayData.PlannedItem(project: item(project), startAt: block.startAt, note: block.note)
+        }
+
         return TodayData(
             now: now,
             dayStart: Calendar.current.startOfDay(for: now),
@@ -67,7 +75,8 @@ struct TodayView: View {
             switches: store.todayFocus.switches,
             longestBlock: store.todayFocus.longestBlock,
             resume: resume,
-            runningNextStep: runningNextStep
+            runningNextStep: runningNextStep,
+            plannedBlock: planned
         )
     }
 
@@ -98,7 +107,12 @@ struct TodayView: View {
             },
             deleteEntry: { item in pendingDeletion = entry(id: item.id) },
             addEntry: addEntry,
-            showProjects: showProjects
+            showProjects: showProjects,
+            startPlannedBlock: { store.startPlannedBlock() },
+            clearPlannedBlock: { store.clearPlannedBlock() },
+            planBlock: { projectId, startAt, note in
+                store.planBlock(projectId: projectId, startAt: startAt, note: note)
+            }
         )
     }
 

@@ -11,8 +11,17 @@ private enum BreakReminderID {
     static let entryKey = "entryId"
 }
 
+/// Kennungen der Mitteilung zum geplanten Block („Geplant: Kundenportal um 14:00“).
+private enum PlannedBlockID {
+    static let request = "dev.eremiya.takt.planned-block"
+    static let category = "dev.eremiya.takt.planned-block"
+    static let startAction = "planned.start"
+    static let blockKey = "blockId"
+}
+
 /// Plant pro Timer-Lauf genau eine lokale Mitteilung „Kurze Pause?“ und pausiert beim
-/// Auslösen auf Wunsch die Musik.
+/// Auslösen auf Wunsch die Musik. Außerdem: Mitteilung zum geplanten Block, wenn dessen Beginn
+/// erreicht ist und kein Timer läuft (Aktion „Starten“).
 @MainActor
 @Observable
 final class BreakReminder: NSObject, UNUserNotificationCenterDelegate {
@@ -30,6 +39,15 @@ final class BreakReminder: NSObject, UNUserNotificationCenterDelegate {
     /// Verhindert, dass ein verspätetes `add` eine inzwischen aufgehobene Mitteilung zurückbringt.
     @ObservationIgnored private var scheduleToken = 0
 
+    /// Geplanter Block samt Projektname (vom Store gemeldet).
+    @ObservationIgnored private var plannedBlock: PlannedBlock?
+    @ObservationIgnored private var plannedProjectName: String?
+    /// Wie `scheduleToken`, für die Mitteilung zum geplanten Block.
+    @ObservationIgnored private var plannedToken = 0
+    /// Aktion „Starten“ der Mitteilung zum geplanten Block; der Store setzt sie in `attach`.
+    /// Übergeben wird die ID des Blocks, damit eine veraltete Mitteilung nichts startet.
+    @ObservationIgnored var startPlannedBlock: ((UUID) -> Void)?
+
     private static let logger = Logger(subsystem: "dev.eremiya.takt", category: "focus")
 
     init(settings: AppSettings, musicController: MusicController) {
@@ -45,6 +63,7 @@ final class BreakReminder: NSObject, UNUserNotificationCenterDelegate {
     func timerDidChange(from old: RunningState?, to new: RunningState?) {
         current = new
         reschedule()
+        reschedulePlanned()
     }
 
     /// Beim App-Start: Zustand übernehmen, ohne dass das als Timer-Start zählt.
@@ -52,6 +71,14 @@ final class BreakReminder: NSObject, UNUserNotificationCenterDelegate {
     func resume(with running: RunningState?) {
         current = running
         reschedule()
+        reschedulePlanned()
+    }
+
+    /// Vom Store, wenn der geplante Block gesetzt, geändert oder entfernt wurde.
+    func plannedBlockDidChange(_ block: PlannedBlock?, projectName: String?) {
+        plannedBlock = block
+        plannedProjectName = projectName
+        reschedulePlanned()
     }
 
     /// Nach Änderungen an den Pausen-Einstellungen aufrufen.
@@ -107,6 +134,69 @@ final class BreakReminder: NSObject, UNUserNotificationCenterDelegate {
         Self.logger.info("Pausenerinnerung in \(Int(delay / 60)) Min geplant.")
     }
 
+    /// Plant „Geplant: … um 14:00“ zum Beginn des Blocks – nur wenn bis dahin nichts läuft.
+    /// Jeder Timer-Wechsel plant neu: Startet vorher ein Timer, entfällt die Mitteilung;
+    /// wird er vor dem Beginn wieder gestoppt, ist sie erneut geplant.
+    private func reschedulePlanned() {
+        plannedToken += 1
+        center.removePendingNotificationRequests(withIdentifiers: [PlannedBlockID.request])
+        // Erledigt (Block weg oder Timer läuft): auch eine schon zugestellte Mitteilung entfernen.
+        if plannedBlock == nil || current != nil {
+            center.removeDeliveredNotifications(withIdentifiers: [PlannedBlockID.request])
+        }
+        guard let block = plannedBlock, let name = plannedProjectName, current == nil else { return }
+        let delay = block.startAt.timeIntervalSinceNow
+        guard delay > 1 else { return }
+
+        let content = UNMutableNotificationContent()
+        content.title = "Geplant: \(name) um \(ClockFormat.time(block.startAt))"
+        content.body = block.note ?? "Jetzt starten?"
+        content.sound = .default
+        content.categoryIdentifier = PlannedBlockID.category
+        content.userInfo = [PlannedBlockID.blockKey: block.id.uuidString]
+
+        let request = UNNotificationRequest(
+            identifier: PlannedBlockID.request,
+            content: content,
+            trigger: UNTimeIntervalNotificationTrigger(timeInterval: delay, repeats: false)
+        )
+
+        let token = plannedToken
+        let center = center
+        Task {
+            await requestAuthorizationIfNeeded()
+            await Self.registerPlannedCategory(center)
+            guard token == plannedToken else { return }
+            do {
+                try await center.add(request)
+                if token != plannedToken {
+                    center.removePendingNotificationRequests(withIdentifiers: [PlannedBlockID.request])
+                }
+            } catch {
+                Self.logger.error("Mitteilung zum geplanten Block nicht geplant: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+        Self.logger.info("Mitteilung zum geplanten Block in \(Int(delay / 60)) Min geplant.")
+    }
+
+    /// Registriert die Kategorie mit der Aktion „Starten“, ohne andere Kategorien zu verlieren.
+    /// `ForgottenTimerGuard` registriert seine beim App-Start ebenfalls per Lesen-und-Ergänzen;
+    /// laufen beide gleichzeitig, kann eine Kategorie verloren gehen – daher kurz nachprüfen.
+    private static func registerPlannedCategory(_ center: UNUserNotificationCenter) async {
+        let category = UNNotificationCategory(
+            identifier: PlannedBlockID.category,
+            actions: [UNNotificationAction(identifier: PlannedBlockID.startAction, title: "Starten")],
+            intentIdentifiers: []
+        )
+        for _ in 0..<3 {
+            var categories = await center.notificationCategories()
+            if categories.contains(where: { $0.identifier == PlannedBlockID.category }) { return }
+            categories.insert(category)
+            center.setNotificationCategories(categories)
+            try? await Task.sleep(for: .milliseconds(500))
+        }
+    }
+
     private func cancelPending() {
         scheduleToken += 1
         fireTask?.cancel()
@@ -144,8 +234,11 @@ final class BreakReminder: NSObject, UNUserNotificationCenterDelegate {
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
-        let entryId = Self.entryId(of: notification)
-        Task { @MainActor in self.didFire(entryId: entryId) }
+        // Geplanter Block: nur anzeigen, keine Pausen-Auslösung.
+        if notification.request.identifier != PlannedBlockID.request {
+            let entryId = Self.entryId(of: notification)
+            Task { @MainActor in self.didFire(entryId: entryId) }
+        }
         completionHandler([.banner, .list, .sound])
     }
 
@@ -157,6 +250,16 @@ final class BreakReminder: NSObject, UNUserNotificationCenterDelegate {
         // Nachfrage „vergessener Timer“ gehört nicht hierher: an ForgottenTimerGuard weiterreichen.
         if ForgottenTimerGuard.handles(response.notification) {
             ForgottenTimerGuard.handleNotificationResponse(response)
+            completionHandler()
+            return
+        }
+        if response.notification.request.identifier == PlannedBlockID.request {
+            // „Starten“ startet das Projekt des Blocks; ein Klick auf die Mitteilung öffnet nur Takt.
+            if response.actionIdentifier == PlannedBlockID.startAction,
+               let text = response.notification.request.content.userInfo[PlannedBlockID.blockKey] as? String,
+               let blockId = UUID(uuidString: text) {
+                Task { @MainActor in self.startPlannedBlock?(blockId) }
+            }
             completionHandler()
             return
         }

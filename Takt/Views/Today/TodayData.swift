@@ -42,6 +42,16 @@ struct TodayData {
         let nextStep: String?
     }
 
+    /// Geplanter „nächster Block“.
+    struct PlannedItem: Hashable {
+        let project: ProjectItem
+        let startAt: Date
+        let note: String?
+
+        /// Beginn erreicht (oder vorbei).
+        func isDue(now: Date) -> Bool { startAt <= now }
+    }
+
     var now: Date
     /// Beginn des heutigen Tages (für Tagesleiste und Zuschnitt).
     var dayStart: Date
@@ -57,6 +67,8 @@ struct TodayData {
     var resume: Resume?
     /// Nur wenn etwas läuft: „Nächster Schritt“ aus dem vorigen Lauf dieses Projekts.
     var runningNextStep: String?
+    /// Geplanter nächster Block, falls vorhanden.
+    var plannedBlock: PlannedItem? = nil
 
     var running: EntryItem? { entries.last(where: \.isRunning) }
     var lastCompleted: EntryItem? { entries.last(where: { !$0.isRunning }) }
@@ -104,6 +116,11 @@ struct TodayActions {
     var deleteEntry: (TodayData.EntryItem) -> Void = { _ in }
     var addEntry: () -> Void = {}
     var showProjects: () -> Void = {}
+    /// Startet das Projekt des geplanten Blocks jetzt (der Block ist damit erledigt).
+    var startPlannedBlock: () -> Void = {}
+    var clearPlannedBlock: () -> Void = {}
+    /// Plant den nächsten Block: Projekt, Beginn, Notiz (leer = keine).
+    var planBlock: (UUID, Date, String) -> Void = { _, _, _ in }
 }
 
 // MARK: - Formate
@@ -116,6 +133,16 @@ enum TodayFormat {
 
     static func clock(_ date: Date) -> String {
         ClockFormat.time(date)
+    }
+
+    /// Uhrzeit eines geplanten Blocks; nicht heute: mit „morgen“ bzw. Datum davor.
+    static func plannedTime(_ date: Date, now: Date) -> String {
+        let calendar = Calendar.current
+        if calendar.isDate(date, inSameDayAs: now) { return clock(date) }
+        if let tomorrow = calendar.date(byAdding: .day, value: 1, to: now), calendar.isDate(date, inSameDayAs: tomorrow) {
+            return "morgen \(clock(date))"
+        }
+        return "\(date.formatted(.dateTime.day().month(.twoDigits).locale(Locale(identifier: "de_DE")))) \(clock(date))"
     }
 
     static func range(_ entry: TodayData.EntryItem) -> String {
@@ -194,7 +221,13 @@ extension TodayData {
                           nextStep: step),
             ],
             resume: Resume(project: samplePortal, nextStep: step)
-        )
+        ).withPlannedBlock(PlannedItem(project: sampleWebsite, startAt: sampleTime(16, 30), note: "Deploy vorbereiten"))
+    }
+
+    private func withPlannedBlock(_ block: PlannedItem) -> TodayData {
+        var copy = self
+        copy.plannedBlock = block
+        return copy
     }
 }
 #endif

@@ -94,7 +94,7 @@ Zielgruppe: ein Freiberufler (Softwareentwicklung), Business- und Privatprojekte
 - Globaler Kurzbefehl Start/Stopp letztes Projekt. Aktionen als App Intents (Kurzbefehle, Spotlight, Siri).
 
 ## Später
-Stundensätze/Rechnungen, geplanter Block im Widget, Schätzung vs. Ist, Aufgaben, iCloud/iPhone,
+Stundensätze/Rechnungen, geplanter Block im Widget (Datenbasis siehe „Widget v2“), Schätzung vs. Ist, Aufgaben, iCloud/iPhone,
 Apple Music, automatische App-Erkennung, Kalender.
 
 ## Umsetzungsreihenfolge
@@ -222,3 +222,73 @@ Folgearbeiten: `musicProvider` (Spotify/Apple Music/Browser/keine), `browserPaus
 - „Stoppen um …“ stoppt jetzt und zeigt „Heute“ (über `takt://today` an diese App), damit der
   Nutzer das Ende im Eintrag korrigiert. Wurde der Eintrag inzwischen anderswo gestoppt, bewirkt
   eine späte Antwort nichts.
+
+## Widget v2 – Datenbasis
+
+Grundlage für den Ausbau des Schreibtisch-Widgets (großes Widget, Ein-Projekt-Widget, Wechseln,
+geplanter Block, Budget). Die Widget-Oberfläche selbst folgt getrennt.
+
+### Datenmodell (Migration `v3`)
+
+| Feld/Tabelle | Typ | Bedeutung |
+|---|---|---|
+| `Project.budgetHours` | `Decimal?`, SQLite **TEXT** | Stundenbudget; `nil` = keins. Wie `hourlyRate` in POSIX-Schreibweise (`"12.5"`) |
+| `plannedBlock` | Tabelle | `id` (UUID), `projectId` (FK → `project`, `ON DELETE CASCADE`), `startAt`, `note?`, `createdAt` |
+
+- **Modell „nächster Block“:** Es gibt höchstens einen geplanten Block. `setPlannedBlock` ersetzt alle
+  vorhandenen (ältere/abgelaufene verschwinden dabei), `clearPlannedBlock` entfernt ihn.
+- **Lesen:** `plannedBlock(now:)` liefert ihn nur, solange `startAt >= now − 4 h` – ein gerade
+  fälliger Block bleibt sichtbar und startbar, ältere werden ignoriert.
+- **Start:** `startTimer` löscht in derselben Transaktion einen Block desselben Projekts, wenn er
+  fällig war (`startAt ≤ now + 15 min`) – auch wenn das Projekt schon lief. „Jetzt starten“ in der App
+  erledigt den Block immer, auch einen später geplanten.
+- **Budget:** `budgetUsage(projectId:now:)` summiert alle Einträge des Projekts (nicht nur heute),
+  laufende bis `now`; Budget in Sekunden (`Project.budgetInterval`, `nil` bei keinem/≤ 0).
+
+### Momentaufnahme (`WidgetSnapshot`)
+
+Bisherige Felder (`running`, `recent`, `todayCompleted`) und der alte Initialisierer bleiben; neu:
+
+| Feld | Inhalt |
+|---|---|
+| `switchTargets` | max. 2 zuletzt genutzte andere Projekte für „Wechseln“ (ohne laufendes) |
+| `allProjects` | alle aktiven Projekte nach `sortOrder`, laufendes eingeschlossen |
+| `todayEntries` | `[TodayEntry]` (`projectId`, `colorHex`, `startedAt`, `endedAt?`), heutiger Kalendertag, auf den Tag zugeschnitten, alle Projekte |
+| `runningNextStep` | „Nächster Schritt“ vom vorherigen Lauf des laufenden Projekts |
+| `plannedBlock` | `PlannedBlockInfo` (`project`, `startAt`, `note`); nicht bei archiviertem Projekt |
+| `breakReminderMinutes` | aus `SharedSettings`, `nil` bei ausgeschalteter Erinnerung |
+| `runningBudget` | `BudgetInfo` (`used` bis zur Momentaufnahme, `budget`, `completed` ohne laufenden Eintrag) nur, wenn das Projekt ein Budget hat |
+| `fixedProjectID`, `fixedProjectRunningElsewhere` | Ein-Projekt-Widget, siehe unten |
+
+- Wie bei `todayCompleted` rechnet das Widget die laufende Dauer selbst minütlich dazu:
+  `BudgetInfo.used(at:runningSince:)`, `fraction(at:runningSince:)`.
+- **Ein-Projekt-Widget** `widgetSnapshot(now:calendar:fixedProjectID:)`: `recent`, `switchTargets`
+  und `allProjects` enthalten nur dieses Projekt (gibt es es nicht mehr: leer; `recent`/`switchTargets`
+  ohne es, wenn es läuft). `running` nur, wenn dieses Projekt läuft; läuft ein anderes, ist
+  `fixedProjectRunningElsewhere` gesetzt. `todayCompleted` und `plannedBlock` nur für dieses Projekt,
+  `runningBudget` ist dessen Budget – **auch im Ruhezustand**. `todayEntries` bleibt vollständig
+  (per `projectId` filterbar).
+- `placeholder` zeigt einen laufenden Timer mit Budget (12:30 / 40 h), „Nächster Schritt“, Tagesleiste
+  und einen geplanten Block.
+
+### Gemeinsame Einstellungen
+
+`SharedSettings` (App-Group-Suite) zusätzlich: `breakReminderEnabled` (Standard an) und
+`breakReminderMinutes` (Standard 75). `AppSettings` spiegelt beide bei jeder Änderung (und einmal beim
+Start) dorthin und lädt die Widget-Timelines neu. `SharedSettings.widgetStyle` ist der **Standardstil
+für neue Widgets**.
+
+### App
+
+- **Projekte:** Feld „Stundenbudget“ (optional, Zahl > 0, Komma oder Punkt). In der Liste dezent
+  „12:30 / 40 h“ mit schmalem Balken in Projektfarbe, ab 80 % Orange, über 100 % Rot; läuft das
+  Projekt, minütlich aktualisiert.
+- **Heute:** unter der Karte „Nächster Block“: entweder „14:00 · Kundenportal“ (+ Notiz, „fällig“ ab
+  Beginn, Klick = ändern), „Jetzt starten“, „×“ – oder „Block planen …“. Popover: Projekt, Uhrzeit
+  (Standard nächste volle Viertelstunde; liegt sie mehr als 5 Minuten zurück, gilt morgen) und
+  Notiz. Schreiben über den Store wie alle Änderungen (Darwin-Notification + Widget-Reload).
+- **Mitteilung:** Erreicht ein geplanter Block seinen Beginn und läuft kein Timer, kommt
+  „Geplant: Kundenportal um 14:00“ (Notiz bzw. „Jetzt starten?“) mit Aktion „Starten“
+  (Kategorie `dev.eremiya.takt.planned-block`, Antwort über das Delegate von `BreakReminder`).
+  Neu geplant bei jeder Änderung des Blocks und bei jedem Timer-Wechsel; startet vorher ein Timer
+  oder wird der Block erledigt, entfällt sie (auch eine schon zugestellte).

@@ -22,6 +22,7 @@ struct ProjectEditor: View {
     @State private var client: String
     @State private var rateText: String
     @State private var isBillable: Bool
+    @State private var budgetText: String
     /// Solange `true`, folgt „Abrechenbar“ der Art (Business → ja, Privat → nein).
     /// Wird `false`, sobald der Schalter von Hand umgelegt wird.
     @State private var billableFollowsKind: Bool
@@ -38,6 +39,7 @@ struct ProjectEditor: View {
         _playlist = State(initialValue: draft.project?.musicSource ?? "")
         _client = State(initialValue: draft.project?.client ?? "")
         _rateText = State(initialValue: HourlyRateField.text(for: draft.project?.hourlyRate))
+        _budgetText = State(initialValue: BudgetFormat.hours(draft.project?.budgetHours))
         let isBusiness = draft.project?.isBusiness ?? true
         let isBillable = draft.project?.isBillable ?? isBusiness
         _isBillable = State(initialValue: isBillable)
@@ -54,6 +56,7 @@ struct ProjectEditor: View {
     private var playlistInvalid: Bool { playlistResult == .invalid && !playlistUnchanged }
     private var rateResult: HourlyRateField.Result { HourlyRateField.parse(rateText) }
     private var trimmedClient: String { client.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var budgetResult: HourlyRateField.Result { BudgetFormat.parse(budgetText) }
 
     /// Platzhalter im Stundensatz-Feld: der Standard-Stundensatz, falls gesetzt.
     private var ratePrompt: String {
@@ -92,6 +95,28 @@ struct ProjectEditor: View {
                     hint: rateText.isEmpty && settings.defaultHourlyRate != nil ? "Leer = Standard-Stundensatz." : nil
                 )
 
+                VStack(alignment: .leading, spacing: 4) {
+                    LabeledContent("Stundenbudget") {
+                        HStack(spacing: 6) {
+                            TextField("Stundenbudget", text: $budgetText, prompt: Text("optional"))
+                                .labelsHidden()
+                                .multilineTextAlignment(.trailing)
+                                .frame(width: 90)
+                            Text("h")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    if budgetResult == .invalid {
+                        Text("Bitte eine Stundenzahl über 0 eingeben, z. B. 40 oder 12,5.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else if !budgetText.isEmpty {
+                        Text("Gezählt wird alle erfasste Zeit des Projekts.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 Toggle("Abrechenbar", isOn: Binding(
                     get: { isBillable },
                     set: { newValue in
@@ -118,7 +143,7 @@ struct ProjectEditor: View {
                     .keyboardShortcut(.cancelAction)
                 Button(isNew ? "Anlegen" : "Sichern", action: save)
                     .keyboardShortcut(.defaultAction)
-                    .disabled(trimmedName.isEmpty || playlistInvalid || rateResult == .invalid)
+                    .disabled(trimmedName.isEmpty || playlistInvalid || rateResult == .invalid || budgetResult == .invalid)
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 16)
@@ -197,6 +222,13 @@ struct ProjectEditor: View {
         case .invalid: return
         }
 
+        let budgetHours: Decimal?
+        switch budgetResult {
+        case .empty: budgetHours = nil
+        case .valid(let hours): budgetHours = hours
+        case .invalid: return
+        }
+
         let existing = draft.project
         let project = Project(
             id: existing?.id ?? UUID(),
@@ -209,6 +241,7 @@ struct ProjectEditor: View {
             client: trimmedClient.isEmpty ? nil : trimmedClient,
             hourlyRate: hourlyRate,
             isBillable: isBillable,
+            budgetHours: budgetHours,
             createdAt: existing?.createdAt ?? .now
         )
         if store.saveProject(project) {

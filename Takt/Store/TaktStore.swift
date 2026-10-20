@@ -27,6 +27,11 @@ final class TaktStore {
     private(set) var todayFocus = FocusStats(switches: 0, longestBlock: 0)
     /// Zuletzt beendetes aktives Projekt („Weiter mit …“); `nil`, solange etwas läuft.
     private(set) var lastUsedProject: Project?
+    /// Der geplante „nächste Block“ (bis 4 h nach Beginn), sonst `nil`.
+    private(set) var plannedBlock: PlannedBlock?
+    /// Verbrauchte Zeit in abgeschlossenen Einträgen (alle Tage) je Projekt mit Stundenbudget.
+    /// Der laufende Eintrag fehlt hier; siehe `budgetUsed(projectId:at:)`.
+    private(set) var budgetCompleted: [UUID: TimeInterval] = [:]
     /// Letzte Fehlermeldung; die Oberfläche zeigt sie als Hinweis an.
     var lastError: String?
 
@@ -38,6 +43,8 @@ final class TaktStore {
     /// Reagieren auf Timer-Übergänge (Musik, Pausenerinnerung); siehe `attach`.
     @ObservationIgnored private var musicController: MusicController?
     @ObservationIgnored private var breakReminder: BreakReminder?
+    /// Projektname, mit dem der geplante Block zuletzt an die Erinnerung gemeldet wurde.
+    @ObservationIgnored private var notifiedPlannedName: String?
 
     /// Öffnet die Datenbank selbst statt über `AppDatabase.shared`, weil `shared` bei einem
     /// Fehler per `fatalError` abbricht – die App soll stattdessen einen Hinweis zeigen.
@@ -69,7 +76,13 @@ final class TaktStore {
     func attach(musicController: MusicController, breakReminder: BreakReminder) {
         self.musicController = musicController
         self.breakReminder = breakReminder
+        // Aktion „Starten“ der Mitteilung zum geplanten Block.
+        breakReminder.startPlannedBlock = { [weak self] blockId in
+            guard let self, self.plannedBlock?.id == blockId else { return }
+            self.startPlannedBlock()
+        }
         breakReminder.resume(with: running)
+        notifyPlannedBlockChange()
     }
 
     // MARK: Laden
@@ -104,6 +117,15 @@ final class TaktStore {
                 runningState = RunningState(project: project, entry: entry)
             }
 
+            let block = try database.plannedBlock(now: now)
+            var budgets: [UUID: TimeInterval] = [:]
+            for project in all where project.budgetInterval != nil {
+                let used = try database.budgetUsage(projectId: project.id, now: now).used
+                // Laufenden Anteil abziehen – die Ansicht rechnet ihn minütlich selbst dazu.
+                let runningPart = runningState?.project.id == project.id ? runningState?.entry.duration(at: now) ?? 0 : 0
+                budgets[project.id] = max(0, used - runningPart)
+            }
+
             let focus = try database.focusStats(in: today, now: now)
             var lastUsed: Project?
             if runningState == nil {
@@ -121,9 +143,15 @@ final class TaktStore {
             if todayCompleted != completed { todayCompleted = completed }
             if todayFocus != focus { todayFocus = focus }
             if lastUsedProject != lastUsed { lastUsedProject = lastUsed }
+            if budgetCompleted != budgets { budgetCompleted = budgets }
+            let blockName = block.flatMap { byId[$0.projectId]?.name }
+            let blockChanged = plannedBlock != block || notifiedPlannedName != blockName
+            if plannedBlock != block { plannedBlock = block }
             let previous = running
             if running != runningState { running = runningState }
             notifyTimerChangeIfNeeded(from: previous, to: runningState)
+            // Nach dem Timer-Wechsel, damit die Erinnerung den aktuellen Lauf-Zustand kennt.
+            if blockChanged { notifyPlannedBlockChange() }
         } catch {
             lastError = Self.message(for: error)
         }
@@ -169,6 +197,14 @@ final class TaktStore {
             }
     }
 
+    /// Verbrauchte Zeit eines Projekts mit Budget (alle Einträge, laufender bis `now`);
+    /// `nil` für Projekte ohne Budget.
+    func budgetUsed(projectId: UUID, at now: Date) -> TimeInterval? {
+        guard let completed = budgetCompleted[projectId] else { return nil }
+        guard let entry = running?.entry, entry.projectId == projectId else { return completed }
+        return completed + entry.duration(at: now)
+    }
+
     /// Nächste freie Sortierposition für ein neues Projekt.
     var nextSortOrder: Int {
         ((projects + archivedProjects).map(\.sortOrder).max() ?? -1) + 1
@@ -191,6 +227,30 @@ final class TaktStore {
     @discardableResult
     func stop(nextStep: String?) -> Bool {
         write { try $0.stopTimer(nextStep: nextStep) }
+    }
+
+    // MARK: Geplanter Block
+
+    /// Plant den nächsten Block (ersetzt einen vorhandenen).
+    @discardableResult
+    func planBlock(projectId: UUID, startAt: Date, note: String?) -> Bool {
+        write { try $0.setPlannedBlock(projectId: projectId, startAt: startAt, note: note) }
+    }
+
+    @discardableResult
+    func clearPlannedBlock() -> Bool {
+        write { try $0.clearPlannedBlock() }
+    }
+
+    /// Startet das Projekt des geplanten Blocks jetzt; der Block ist damit erledigt –
+    /// auch wenn er erst später geplant war.
+    @discardableResult
+    func startPlannedBlock() -> Bool {
+        guard let block = plannedBlock else { return false }
+        return write { database in
+            try database.startTimer(projectId: block.projectId)
+            try database.clearPlannedBlock()
+        }
     }
 
     // MARK: Projekte
@@ -305,6 +365,13 @@ final class TaktStore {
         guard old?.entry.id != new?.entry.id || old?.project.id != new?.project.id else { return }
         musicController?.timerDidChange(from: old, to: new)
         breakReminder?.timerDidChange(from: old, to: new)
+    }
+
+    /// Meldet den (neuen) geplanten Block an die Erinnerung, die daraus eine Mitteilung plant.
+    private func notifyPlannedBlockChange() {
+        let projectName = plannedBlock.flatMap { projectsById[$0.projectId]?.name }
+        notifiedPlannedName = projectName
+        breakReminder?.plannedBlockDidChange(plannedBlock, projectName: projectName)
     }
 
     private func startObserving() {

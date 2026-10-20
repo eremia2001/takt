@@ -4,6 +4,7 @@ import SwiftUI
 //   Start-Kapseln: alle aktiven Projekte, gruppiert nach Business | Privat, dazu „+ Eintrag“.
 //   Farbkarte: läuft → Projektfarbe füllt die Karte (wie Widget „Farbfläche“);
 //              Pause → neutrale Karte mit Tagessumme und „Weiter mit …“.
+//   Nächster Block: geplanter Start („14:00 · Kundenportal“) oder „Block planen…“.
 //   Tagesleiste: Zeitfenster mit farbigen Segmenten und Jetzt-Marke, Fokus-Kennzahlen darüber.
 //   Einträge: schlichte Liste, neueste oben.
 // Rein darstellend: Daten kommen als `TodayData`, Aktionen als `TodayActions`.
@@ -22,6 +23,8 @@ struct TodayScreen: View {
             } else {
                 TodayIdleCard(data: data, theme: theme, actions: actions)
             }
+            TodayNextBlockRow(data: data, theme: theme, actions: actions)
+                .padding(.top, -8)
             TodayDayStrip(data: data, theme: theme)
             TodayEntryList(data: data, theme: theme, actions: actions)
         }
@@ -314,6 +317,217 @@ private struct TodayIdleCard: View {
         .frame(height: 190)
         .background(theme.surface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(theme.hairline, lineWidth: 1))
+    }
+}
+
+// MARK: - Nächster Block
+
+private struct TodayNextBlockRow: View {
+    let data: TodayData
+    let theme: DesignTheme
+    let actions: TodayActions
+
+    @State private var isPlanning = false
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Text("Nächster Block")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(theme.tertiary)
+            if let block = data.plannedBlock {
+                planned(block)
+            } else {
+                Button { isPlanning = true } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "calendar.badge.plus")
+                            .font(.system(size: 11, weight: .semibold))
+                        Text("Block planen …")
+                            .font(.system(size: 12, weight: .medium))
+                    }
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 10)
+                    .frame(height: 24)
+                    .overlay(Capsule().stroke(theme.hairline, lineWidth: 1))
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(data.projects.isEmpty)
+                .help("Den nächsten Arbeitsblock vormerken")
+                .popover(isPresented: $isPlanning, arrowEdge: .bottom) { popover }
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(height: 28)
+    }
+
+    private func planned(_ block: TodayData.PlannedItem) -> some View {
+        let isDue = block.isDue(now: data.now)
+        let isRunning = data.running?.project.id == block.project.id
+        return HStack(alignment: .center, spacing: 10) {
+            // Klick auf den Block: ändern.
+            Button { isPlanning = true } label: {
+                HStack(spacing: 7) {
+                    Circle().fill(block.project.color).frame(width: 8, height: 8)
+                    Text("\(TodayFormat.plannedTime(block.startAt, now: data.now)) · \(block.project.name)")
+                        .font(.system(size: 13, weight: .medium))
+                        .monospacedDigit()
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    if isDue {
+                        Text("fällig")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(block.project.color)
+                    }
+                    if let note = block.note {
+                        Text(note)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Geplanten Block ändern")
+            .popover(isPresented: $isPlanning, arrowEdge: .bottom) { popover }
+
+            if !isRunning {
+                Button(action: actions.startPlannedBlock) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "play.fill")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(block.project.color)
+                        Text("Jetzt starten")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.primary)
+                    }
+                    .padding(.horizontal, 10)
+                    .frame(height: 24)
+                    .background(theme.tint(block.project.color, strong: isDue), in: Capsule())
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .help("\(block.project.name) jetzt starten")
+            }
+
+            Button(action: actions.clearPlannedBlock) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(theme.tertiary)
+                    .frame(width: 20, height: 20)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .help("Geplanten Block entfernen")
+            .accessibilityLabel("Geplanten Block entfernen")
+        }
+    }
+
+    private var popover: some View {
+        TodayPlanBlockPopover(data: data) { projectId, startAt, note in
+            isPlanning = false
+            actions.planBlock(projectId, startAt, note)
+        } cancel: {
+            isPlanning = false
+        }
+    }
+}
+
+/// Popover „Block planen“: Projekt, Uhrzeit (Standard: nächste volle Viertelstunde), Notiz.
+private struct TodayPlanBlockPopover: View {
+    let data: TodayData
+    let save: (UUID, Date, String) -> Void
+    let cancel: () -> Void
+
+    @State private var projectId: UUID
+    @State private var time: Date
+    @State private var note: String
+
+    init(data: TodayData, save: @escaping (UUID, Date, String) -> Void, cancel: @escaping () -> Void) {
+        self.data = data
+        self.save = save
+        self.cancel = cancel
+        // Vorbelegung: vorhandener Block, sonst „Weiter mit …“, sonst ein nicht laufendes Projekt.
+        let fallback = data.projects.first { $0.id != data.running?.project.id } ?? data.projects.first
+        let project = data.plannedBlock?.project ?? data.resume?.project ?? fallback
+        _projectId = State(initialValue: project?.id ?? UUID())
+        _time = State(initialValue: data.plannedBlock?.startAt ?? Self.nextQuarterHour(after: data.now))
+        _note = State(initialValue: data.plannedBlock?.note ?? "")
+    }
+
+    /// Gewählte Uhrzeit am heutigen Tag; liegt sie (mehr als 5 Minuten) zurück, morgen.
+    private var startAt: Date {
+        let calendar = Calendar.current
+        let parts = calendar.dateComponents([.hour, .minute], from: time)
+        let today = calendar.date(
+            bySettingHour: parts.hour ?? 0, minute: parts.minute ?? 0, second: 0, of: data.now
+        ) ?? time
+        if today < data.now.addingTimeInterval(-5 * 60) {
+            return calendar.date(byAdding: .day, value: 1, to: today) ?? today
+        }
+        return today
+    }
+
+    private var isTomorrow: Bool { !Calendar.current.isDate(startAt, inSameDayAs: data.now) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(data.plannedBlock == nil ? "Block planen" : "Block ändern")
+                .font(.system(size: 13, weight: .semibold))
+            Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 10) {
+                GridRow {
+                    Text("Projekt").foregroundStyle(.secondary)
+                    Picker("Projekt", selection: $projectId) {
+                        ForEach(data.projects) { project in
+                            Text(project.name).tag(project.id)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                }
+                GridRow {
+                    Text("Uhrzeit").foregroundStyle(.secondary)
+                    HStack(spacing: 8) {
+                        DatePicker("Uhrzeit", selection: $time, displayedComponents: .hourAndMinute)
+                            .labelsHidden()
+                        if isTomorrow {
+                            Text("morgen")
+                                .font(.system(size: 12))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                GridRow {
+                    Text("Notiz").foregroundStyle(.secondary)
+                    TextField("Notiz", text: $note, prompt: Text("optional"))
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit(submit)
+                }
+            }
+            .font(.system(size: 13))
+            HStack {
+                Spacer()
+                Button("Abbrechen", role: .cancel, action: cancel)
+                    .keyboardShortcut(.cancelAction)
+                Button("Planen", action: submit)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!data.projects.contains { $0.id == projectId })
+            }
+        }
+        .padding(16)
+        .frame(width: 300)
+    }
+
+    private func submit() {
+        guard data.projects.contains(where: { $0.id == projectId }) else { return }
+        save(projectId, startAt, note)
+    }
+
+    /// Nächste volle Viertelstunde nach `date` (genau auf der Viertelstunde: die folgende).
+    static func nextQuarterHour(after date: Date) -> Date {
+        let quarter: TimeInterval = 15 * 60
+        let next = (date.timeIntervalSinceReferenceDate / quarter).rounded(.down) * quarter + quarter
+        return Date(timeIntervalSinceReferenceDate: next)
     }
 }
 

@@ -28,6 +28,9 @@ public struct Project: Codable, Identifiable, Hashable, Sendable, FetchableRecor
     /// Zeit auf diesem Projekt ist abrechenbar (Vorgabe für alle Einträge, siehe
     /// `TimeEntry.isBillable`). Standard: wie `isBusiness`.
     public var isBillable: Bool
+    /// Stundenbudget des Projekts in Stunden; `nil` = kein Budget. In SQLite als TEXT gespeichert
+    /// (wie `hourlyRate`). Gezählt wird über alle Einträge des Projekts, siehe `budgetUsage`.
+    public var budgetHours: Decimal?
     public var createdAt: Date
 
     public init(
@@ -41,6 +44,7 @@ public struct Project: Codable, Identifiable, Hashable, Sendable, FetchableRecor
         client: String? = nil,
         hourlyRate: Decimal? = nil,
         isBillable: Bool? = nil,
+        budgetHours: Decimal? = nil,
         createdAt: Date = .now
     ) {
         self.id = id
@@ -53,6 +57,7 @@ public struct Project: Codable, Identifiable, Hashable, Sendable, FetchableRecor
         self.client = client
         self.hourlyRate = hourlyRate
         self.isBillable = isBillable ?? isBusiness
+        self.budgetHours = budgetHours
         self.createdAt = createdAt
     }
 
@@ -85,7 +90,7 @@ public struct Project: Codable, Identifiable, Hashable, Sendable, FetchableRecor
     /// Gespeicherte Felder. Ausdrücklich aufgeführt, damit der Alias `playlistURI` nie mitkodiert wird.
     public enum CodingKeys: String, CodingKey {
         case id, name, colorHex, isBusiness, isArchived, sortOrder
-        case musicSource, client, hourlyRate, isBillable, createdAt
+        case musicSource, client, hourlyRate, isBillable, budgetHours, createdAt
     }
 
     public enum Columns {
@@ -98,6 +103,13 @@ public struct Project: Codable, Identifiable, Hashable, Sendable, FetchableRecor
         public static let client = Column(CodingKeys.client)
         public static let hourlyRate = Column(CodingKeys.hourlyRate)
         public static let musicSource = Column(CodingKeys.musicSource)
+        public static let budgetHours = Column(CodingKeys.budgetHours)
+    }
+
+    /// Budget in Sekunden; `nil` ohne Budget (oder bei einem Budget ≤ 0).
+    public var budgetInterval: TimeInterval? {
+        guard let budgetHours, budgetHours > 0 else { return nil }
+        return NSDecimalNumber(decimal: budgetHours * 3600).doubleValue
     }
 }
 
@@ -154,6 +166,44 @@ public struct TimeEntry: Codable, Identifiable, Hashable, Sendable, FetchableRec
     }
 }
 
+// MARK: - Geplanter Block
+
+/// Der „nächste Block“: ein für später geplanter Start eines Projekts. Es gibt höchstens einen;
+/// `setPlannedBlock` ersetzt alle vorhandenen, abgelaufene werden beim Lesen ignoriert.
+public struct PlannedBlock: Codable, Identifiable, Hashable, Sendable, FetchableRecord, PersistableRecord {
+    public static let databaseTableName = "plannedBlock"
+
+    public var id: UUID
+    public var projectId: UUID
+    /// Geplanter Beginn.
+    public var startAt: Date
+    /// Optionale Notiz, z. B. was in dem Block passieren soll.
+    public var note: String?
+    public var createdAt: Date
+
+    public init(
+        id: UUID = UUID(),
+        projectId: UUID,
+        startAt: Date,
+        note: String? = nil,
+        createdAt: Date = .now
+    ) {
+        self.id = id
+        self.projectId = projectId
+        self.startAt = startAt
+        self.note = note
+        self.createdAt = createdAt
+    }
+
+    public enum Columns {
+        public static let id = Column(CodingKeys.id)
+        public static let projectId = Column(CodingKeys.projectId)
+        public static let startAt = Column(CodingKeys.startAt)
+        public static let note = Column(CodingKeys.note)
+        public static let createdAt = Column(CodingKeys.createdAt)
+    }
+}
+
 // MARK: - Datumsspeicherung
 
 // Datumswerte werden als REAL (Sekunden seit 2001-01-01, wie `Date` intern) gespeichert.
@@ -173,6 +223,16 @@ extension Project {
 }
 
 extension TimeEntry {
+    public static func databaseDateEncodingStrategy(for column: String) -> DatabaseDateEncodingStrategy {
+        .timeIntervalSinceReferenceDate
+    }
+
+    public static func databaseDateDecodingStrategy(for column: String) -> DatabaseDateDecodingStrategy {
+        .timeIntervalSinceReferenceDate
+    }
+}
+
+extension PlannedBlock {
     public static func databaseDateEncodingStrategy(for column: String) -> DatabaseDateEncodingStrategy {
         .timeIntervalSinceReferenceDate
     }

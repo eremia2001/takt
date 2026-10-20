@@ -190,6 +190,10 @@ private struct ProjectRow<Accessory: View>: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 12)
+            if project.budgetInterval != nil {
+                ProjectBudgetGauge(project: project, theme: theme)
+                    .padding(.trailing, 6)
+            }
             accessory()
         }
         .padding(.vertical, 9)
@@ -228,5 +232,72 @@ private struct ProjectTodayTotal: View {
             .frame(width: 44, alignment: .trailing)
             .help("Heute")
             .accessibilityLabel("Heute \(DurationFormat.hourMinute(total))")
+    }
+}
+
+// MARK: - Budget
+
+/// Dezente Budgetanzeige „12:30 / 40 h“ mit schmalem Balken: Projektfarbe, ab 80 % Orange,
+/// über 100 % Rot. Läuft das Projekt, minütlich aktualisiert.
+private struct ProjectBudgetGauge: View {
+    let project: Project
+    let theme: DesignTheme
+
+    @Environment(TaktStore.self) private var store
+
+    var body: some View {
+        if let entry = store.running?.entry, entry.projectId == project.id {
+            TimelineView(.periodic(from: entry.startedAt, by: 60)) { context in
+                gauge(used: store.budgetUsed(projectId: project.id, at: context.date) ?? 0)
+            }
+        } else {
+            gauge(used: store.budgetUsed(projectId: project.id, at: .now) ?? 0)
+        }
+    }
+
+    private func gauge(used: TimeInterval) -> some View {
+        let budget = project.budgetInterval ?? 1
+        let fraction = used / budget
+        let tint: Color = fraction > 1 ? .red : (fraction >= 0.8 ? .orange : Color(hex: project.colorHex))
+        let label = "\(DurationFormat.hourMinute(used)) / \(BudgetFormat.hours(project.budgetHours)) h"
+        return VStack(alignment: .trailing, spacing: 4) {
+            Text(label)
+                .font(.system(size: 11, weight: .medium))
+                .monospacedDigit()
+                .foregroundStyle(fraction > 1 ? AnyShapeStyle(Color.red) : AnyShapeStyle(.secondary))
+                .lineLimit(1)
+            Capsule()
+                .fill(theme.track)
+                .frame(width: 72, height: 3)
+                .overlay(alignment: .leading) {
+                    Capsule()
+                        .fill(tint.opacity(project.isArchived ? 0.5 : 1))
+                        .frame(width: 72 * min(1, max(0, fraction)), height: 3)
+                }
+        }
+        .help("Budget: \(label) (\(Int((fraction * 100).rounded())) %)")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Budget \(label), \(Int((fraction * 100).rounded())) Prozent")
+    }
+}
+
+/// Schreibweise und Eingabe des Stundenbudgets („40“, „12,5“).
+enum BudgetFormat {
+    /// Anzeige ohne überflüssige Nachkommastellen; `nil` → leer.
+    static func hours(_ hours: Decimal?) -> String {
+        guard let hours else { return "" }
+        var text = Money.germanString(hours)
+        while text.hasSuffix("0") && text.contains(",") { text.removeLast() }
+        if text.hasSuffix(",") { text.removeLast() }
+        return text
+    }
+
+    /// Leer → `.empty`; Zahl > 0 in deutscher oder englischer Schreibweise → `.valid`.
+    static func parse(_ text: String) -> HourlyRateField.Result {
+        switch HourlyRateField.parse(text) {
+        case .valid(let value) where value > 0: .valid(value)
+        case .empty: .empty
+        default: .invalid
+        }
     }
 }

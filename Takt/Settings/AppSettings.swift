@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import Observation
 import TaktCore
+import WidgetKit
 
 /// App-Einstellungen, dauerhaft in `UserDefaults` (Schlüssel mit Präfix `settings.`).
 /// Jede Änderung wird sofort gespeichert.
@@ -31,12 +32,22 @@ final class AppSettings {
 
     // MARK: Pausen
 
+    /// Wird zusätzlich in die App-Group-Suite gespiegelt (`SharedSettings`), damit das Widget
+    /// die Erinnerung anzeigen kann.
     var breakReminderEnabled: Bool {
-        didSet { defaults.set(breakReminderEnabled, forKey: Key.breakReminderEnabled) }
+        didSet {
+            defaults.set(breakReminderEnabled, forKey: Key.breakReminderEnabled)
+            SharedSettings.breakReminderEnabled = breakReminderEnabled
+            if breakReminderEnabled != oldValue { WidgetCenter.shared.reloadAllTimelines() }
+        }
     }
-    /// Minuten nach Timer-Start bis zur Erinnerung.
+    /// Minuten nach Timer-Start bis zur Erinnerung (ebenfalls gespiegelt).
     var breakReminderMinutes: Int {
-        didSet { defaults.set(breakReminderMinutes, forKey: Key.breakReminderMinutes) }
+        didSet {
+            defaults.set(breakReminderMinutes, forKey: Key.breakReminderMinutes)
+            SharedSettings.breakReminderMinutes = breakReminderMinutes
+            if breakReminderMinutes != oldValue { WidgetCenter.shared.reloadAllTimelines() }
+        }
     }
     /// Bei der Pausenerinnerung Musik pausieren.
     var breakPausesMusic: Bool { didSet { defaults.set(breakPausesMusic, forKey: Key.breakPausesMusic) } }
@@ -105,7 +116,7 @@ final class AppSettings {
 
     // MARK: Widget
 
-    /// Darstellung des Widgets. Liegt nicht in `defaults`, sondern in der App-Group-Suite
+    /// Standardstil für neue Widgets. Liegt nicht in `defaults`, sondern in der App-Group-Suite
     /// (`SharedSettings`), damit die Widget-Extension sie lesen kann.
     var widgetStyle: WidgetStyle { didSet { SharedSettings.widgetStyle = widgetStyle } }
 
@@ -186,6 +197,10 @@ final class AppSettings {
                                            fallback: Self.defaultShortcutKeyCode)
         let storedModifiers = (defaults.object(forKey: Key.globalShortcutModifiers) as? NSNumber)?.uintValue
         globalShortcutModifiers = (storedModifiers ?? 0) == 0 ? Self.defaultShortcutModifiers : storedModifiers!
+
+        // `didSet` greift in `init` nicht: Pausenerinnerung einmal beim Start für das Widget spiegeln.
+        SharedSettings.breakReminderEnabled = breakReminderEnabled
+        SharedSettings.breakReminderMinutes = breakReminderMinutes
     }
 
     /// Großgeschriebener Code, wenn `text` aus genau drei Buchstaben A–Z besteht, sonst `nil`.

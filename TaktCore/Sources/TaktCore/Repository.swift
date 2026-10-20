@@ -83,6 +83,8 @@ extension AppDatabase {
     public func startTimer(projectId: UUID, now: Date = .now) throws -> TimeEntry {
         try writer.write { db in
             guard try Project.exists(db, id: projectId) else { throw TaktError.projectNotFound }
+            // Ein fälliger geplanter Block dieses Projekts ist mit dem Start erledigt.
+            try Self.deleteDuePlannedBlocks(db, projectId: projectId, now: now)
             if var running = try Self.activeEntry(db) {
                 if running.projectId == projectId { return running }
                 running.endedAt = max(now, running.startedAt)
@@ -109,13 +111,7 @@ extension AppDatabase {
 
     /// „Nächster Schritt“ des zuletzt beendeten Eintrags dieses Projekts.
     public func lastNextStep(projectId: UUID) throws -> String? {
-        try writer.read { db in
-            try TimeEntry
-                .filter(TimeEntry.Columns.projectId == projectId && TimeEntry.Columns.endedAt != nil)
-                .order(TimeEntry.Columns.endedAt.desc)
-                .fetchOne(db)?
-                .nextStep
-        }
+        try writer.read { db in try Self.lastNextStep(db, projectId: projectId) }
     }
 
     /// Nicht archivierte Projekte, zuletzt genutzte zuerst (jüngster Start), danach nie genutzte
@@ -123,6 +119,53 @@ extension AppDatabase {
     /// Das laufende Projekt ist enthalten – das Ausblenden ist Sache der Oberfläche.
     public func recentProjects(limit: Int, now: Date = .now) throws -> [Project] {
         try writer.read { db in try Self.recentProjects(db, limit: limit, now: now) }
+    }
+
+    // MARK: Geplanter Block
+
+    /// Wie lange ein geplanter Block nach seinem Beginn noch als „nächster Block“ gilt –
+    /// damit ein gerade fälliger Block noch angezeigt (und gestartet) werden kann.
+    public static let plannedBlockGrace: TimeInterval = 4 * 3600
+
+    /// Bis zu diesem Abstand vor dem geplanten Beginn gilt ein Block beim Start als fällig
+    /// und wird von `startTimer` gelöscht.
+    public static let plannedBlockLeadTime: TimeInterval = 15 * 60
+
+    /// Der geplante Block, sofern er nicht älter als `plannedBlockGrace` ist
+    /// (`startAt >= now - 4 h`). Ältere werden ignoriert (und beim nächsten Setzen gelöscht).
+    public func plannedBlock(now: Date = .now) throws -> PlannedBlock? {
+        try writer.read { db in try Self.plannedBlock(db, now: now) }
+    }
+
+    /// Plant den nächsten Block und ersetzt dabei alle vorhandenen. `note` wird getrimmt;
+    /// leer wird zu `nil`.
+    /// - Throws: `TaktError.projectNotFound`.
+    @discardableResult
+    public func setPlannedBlock(projectId: UUID, startAt: Date, note: String? = nil, now: Date = .now) throws -> PlannedBlock {
+        try writer.write { db in
+            guard try Project.exists(db, id: projectId) else { throw TaktError.projectNotFound }
+            try PlannedBlock.deleteAll(db)
+            let block = PlannedBlock(projectId: projectId, startAt: startAt, note: Self.normalizedNote(note), createdAt: now)
+            try block.insert(db)
+            return block
+        }
+    }
+
+    /// Entfernt den geplanten Block (alle, falls es durch Altbestände mehrere gäbe).
+    public func clearPlannedBlock() throws {
+        try writer.write { db in _ = try PlannedBlock.deleteAll(db) }
+    }
+
+    // MARK: Budget
+
+    /// Verbrauchte Zeit des Projekts über alle Einträge (nicht nur heute; laufende bis `now`)
+    /// und sein Budget in Sekunden (`nil` = kein Budget).
+    /// - Throws: `TaktError.projectNotFound`.
+    public func budgetUsage(projectId: UUID, now: Date = .now) throws -> (used: TimeInterval, budget: TimeInterval?) {
+        try writer.read { db in
+            guard let project = try Project.fetchOne(db, id: projectId) else { throw TaktError.projectNotFound }
+            return (try Self.usedTime(db, projectId: projectId, now: now), project.budgetInterval)
+        }
     }
 
     // MARK: Einträge
@@ -185,6 +228,14 @@ extension AppDatabase {
         try TimeEntry.filter(TimeEntry.Columns.endedAt == nil).fetchOne(db)
     }
 
+    static func lastNextStep(_ db: Database, projectId: UUID) throws -> String? {
+        try TimeEntry
+            .filter(TimeEntry.Columns.projectId == projectId && TimeEntry.Columns.endedAt != nil)
+            .order(TimeEntry.Columns.endedAt.desc)
+            .fetchOne(db)?
+            .nextStep
+    }
+
     static func recentProjects(_ db: Database, limit: Int, now: Date) throws -> [Project] {
         guard limit > 0 else { return [] }
         return try Project.fetchAll(db, sql: """
@@ -200,6 +251,30 @@ extension AppDatabase {
             ORDER BY usage.lastStartedAt IS NULL, usage.lastStartedAt DESC, project.sortOrder, project.name
             LIMIT ?
             """, arguments: [now.databaseTime, limit])
+    }
+
+    static func plannedBlock(_ db: Database, now: Date) throws -> PlannedBlock? {
+        try PlannedBlock
+            .filter(PlannedBlock.Columns.startAt >= now.addingTimeInterval(-plannedBlockGrace).databaseTime)
+            .order(PlannedBlock.Columns.startAt, PlannedBlock.Columns.createdAt.desc)
+            .fetchOne(db)
+    }
+
+    /// Löscht geplante Blöcke des Projekts, die zu `now` fällig sind (Beginn ≤ now + 15 min).
+    static func deleteDuePlannedBlocks(_ db: Database, projectId: UUID, now: Date) throws {
+        try PlannedBlock
+            .filter(PlannedBlock.Columns.projectId == projectId)
+            .filter(PlannedBlock.Columns.startAt <= now.addingTimeInterval(plannedBlockLeadTime).databaseTime)
+            .deleteAll(db)
+    }
+
+    /// Summe aller Einträge des Projekts; laufende zählen bis `now`, nie negativ.
+    static func usedTime(_ db: Database, projectId: UUID, now: Date) throws -> TimeInterval {
+        try Double.fetchOne(db, sql: """
+            SELECT TOTAL(MAX(0, COALESCE(endedAt, ?) - startedAt))
+            FROM timeEntry
+            WHERE projectId = ?
+            """, arguments: [now.databaseTime, projectId]) ?? 0
     }
 
     static func entries(_ db: Database, in interval: DateInterval) throws -> [TimeEntry] {
