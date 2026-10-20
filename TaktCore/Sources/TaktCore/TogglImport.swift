@@ -345,7 +345,8 @@ extension AppDatabase {
                     startedAt: item.start,
                     endedAt: item.end,
                     nextStep: Self.normalizedNote(item.description),
-                    isBillable: item.isBillable.flatMap { $0 == project.isBillable ? nil : $0 }
+                    isBillable: item.isBillable.flatMap { $0 == project.isBillable ? nil : $0 },
+                    updatedAt: .now
                 )
                 try entry.insert(db)
                 inserted += 1

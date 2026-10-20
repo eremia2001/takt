@@ -139,7 +139,8 @@ struct TimerTests {
 
         done.endedAt = date(2026, 10, 20, 8, 15)
         done.nextStep = "Weiter"
-        try f.db.updateEntry(done)
+        try f.db.updateEntry(done, now: date(2026, 10, 20, 9))
+        done.updatedAt = date(2026, 10, 20, 9)  // updateEntry setzt den Änderungszeitpunkt
         let all = try f.db.entries(in: DateInterval(start: date(2026, 10, 20), end: date(2026, 10, 21)))
         #expect(all.first { $0.id == done.id } == done)
 

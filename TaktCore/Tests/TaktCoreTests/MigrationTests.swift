@@ -74,7 +74,7 @@ struct MigrationTests {
             let projectColumns = Set(try db.columns(in: "project").map(\.name))
             #expect(projectColumns.isSuperset(of: ["hourlyRate", "isBillable", "client", "musicSource", "playlistURI"]))
             #expect(try db.columns(in: "timeEntry").map(\.name).contains("isBillable"))
-            #expect(try AppDatabase.migrator.appliedIdentifiers(db) == ["v1", "v2", "v3", "v4"])
+            #expect(try AppDatabase.migrator.appliedIdentifiers(db) == ["v1", "v2", "v3", "v4", "v5"])
         }
     }
 
@@ -117,8 +117,9 @@ struct MigrationTests {
     @Test("Eintrag mit eigenem isBillable wird gespeichert")
     func entryBillableRoundTrip() throws {
         let f = try Fixture()
-        let entry = TimeEntry(projectId: f.alpha.id, startedAt: date(2026, 10, 20, 9), endedAt: date(2026, 10, 20, 10), isBillable: false)
-        try f.db.addEntry(entry)
+        var entry = TimeEntry(projectId: f.alpha.id, startedAt: date(2026, 10, 20, 9), endedAt: date(2026, 10, 20, 10), isBillable: false)
+        try f.db.addEntry(entry, now: date(2026, 10, 20, 10, 5))
+        entry.updatedAt = date(2026, 10, 20, 10, 5)  // addEntry setzt den Änderungszeitpunkt
         #expect(try f.db.entries(in: DateInterval(start: date(2026, 10, 20), end: date(2026, 10, 21))) == [entry])
     }
 

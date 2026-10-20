@@ -46,7 +46,7 @@ struct MigrationV3Tests {
         #expect(try db.plannedBlock(now: date(2026, 10, 20)) == nil)
 
         try queue.read { db in
-            #expect(try AppDatabase.migrator.appliedIdentifiers(db) == ["v1", "v2", "v3", "v4"])
+            #expect(try AppDatabase.migrator.appliedIdentifiers(db) == ["v1", "v2", "v3", "v4", "v5"])
             #expect(try db.columns(in: "project").map(\.name).contains("budgetHours"))
             let columns = Set(try db.columns(in: "plannedBlock").map(\.name))
             #expect(columns == ["id", "projectId", "startAt", "note", "createdAt"])

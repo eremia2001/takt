@@ -51,7 +51,7 @@ struct MigrationV4Tests {
         #expect(try db.daysOff(in: DateInterval(start: date(2026, 1, 1), end: date(2027, 1, 1)), calendar: testCalendar).isEmpty)
 
         try queue.read { db throws in
-            #expect(try AppDatabase.migrator.appliedIdentifiers(db) == ["v1", "v2", "v3", "v4"])
+            #expect(try AppDatabase.migrator.appliedIdentifiers(db) == ["v1", "v2", "v3", "v4", "v5"])
             #expect(try db.columns(in: "timeEntry").map(\.name).contains("tag"))
             #expect(Set(try db.columns(in: "dayOff").map(\.name)) == ["id", "date", "kind", "note"])
             #expect(try db.table("dayOff", hasUniqueKey: ["date"]))

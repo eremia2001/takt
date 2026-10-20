@@ -521,6 +521,300 @@ extension AppDatabase {
     }
 }
 
+// MARK: - Jahresbericht
+
+/// Ein Kalendermonat im Jahresbericht (Werte wie im Monatsbericht, `report(for: .month(…))`).
+public struct MonthBucket: Hashable, Sendable {
+    /// Der 1. des Monats, Mitternacht im Berichtskalender.
+    public var month: Date
+    public var total: TimeInterval
+    public var billable: TimeInterval
+    /// Abrechenbar, je Eintrag gerundet.
+    public var roundedBillable: TimeInterval
+    public var business: TimeInterval
+    public var personal: TimeInterval
+    public var amount: Decimal
+    public var activeDays: Int
+
+    public init(
+        month: Date,
+        total: TimeInterval,
+        billable: TimeInterval,
+        roundedBillable: TimeInterval,
+        business: TimeInterval,
+        personal: TimeInterval,
+        amount: Decimal,
+        activeDays: Int
+    ) {
+        self.month = month
+        self.total = total
+        self.billable = billable
+        self.roundedBillable = roundedBillable
+        self.business = business
+        self.personal = personal
+        self.amount = amount
+        self.activeDays = activeDays
+    }
+}
+
+/// Zeit und Betrag je Kunde (`Project.client`, getrimmt; gleiche Namen in anderer Schreibweise
+/// werden zusammengefasst).
+public struct ClientRow: Hashable, Sendable {
+    /// `nil` = Projekte ohne Kunde.
+    public var client: String?
+    public var duration: TimeInterval
+    public var billableDuration: TimeInterval
+    public var amount: Decimal
+    /// Projekte dieses Kunden mit Zeit im Jahr.
+    public var projectCount: Int
+
+    public init(client: String?, duration: TimeInterval, billableDuration: TimeInterval, amount: Decimal, projectCount: Int) {
+        self.client = client
+        self.duration = duration
+        self.billableDuration = billableDuration
+        self.amount = amount
+        self.projectCount = projectCount
+    }
+}
+
+/// Anteil eines Tags an der Jahreszeit.
+public struct TagShare: Hashable, Sendable {
+    /// `nil` = ohne Tag bzw. (mit `isOther`) „Sonstige“.
+    public var tag: String?
+    public var duration: TimeInterval
+    /// `duration / YearReport.total`.
+    public var fraction: Double
+    /// Sammelposten „Sonstige“ für alle Tags jenseits der ersten acht.
+    public var isOther: Bool
+
+    public init(tag: String?, duration: TimeInterval, fraction: Double, isOther: Bool = false) {
+        self.tag = tag
+        self.duration = duration
+        self.fraction = fraction
+        self.isOther = isOther
+    }
+
+    /// Name für die Oberfläche: Tag, „Sonstige“ oder „ohne Tag“.
+    public var title: String { isOther ? "Sonstige" : (tag ?? "ohne Tag") }
+}
+
+/// Auswertung eines Kalenderjahres. Dauern sind auf das Jahr zugeschnitten, laufende Einträge
+/// zählen bis `now`.
+public struct YearReport: Hashable, Sendable {
+    public var year: Int
+    /// 1. Januar bis 1. Januar des Folgejahres (exklusiv).
+    public var interval: DateInterval
+    /// Genau 12 Monate, Januar bis Dezember, lückenlos (auch ohne Zeit).
+    public var months: [MonthBucket]
+    /// Nach Betrag absteigend, dann nach Dauer; „ohne Kunde“ bei Gleichstand zuletzt.
+    public var byClient: [ClientRow]
+    /// Wie `Report.rows` für das ganze Jahr (nach Dauer absteigend).
+    public var byProject: [ProjectReportRow]
+    /// Die acht größten Tags, danach „Sonstige“ (falls es mehr gibt) und „ohne Tag“ (falls vorhanden);
+    /// die Anteile ergeben zusammen 1. Leer ohne Zeit.
+    public var tagShares: [TagShare]
+    public var total: TimeInterval
+    public var billable: TimeInterval
+    public var amount: Decimal
+    public var business: TimeInterval
+    public var personal: TimeInterval
+    public var activeDays: Int
+    /// `total / activeDays`, 0 ohne aktive Tage.
+    public var averagePerActiveDay: TimeInterval
+    /// Gesamtzeit des Vorjahres (zum Vergleich).
+    public var previousYearTotal: TimeInterval
+    /// Betrag des Vorjahres (gleiche Rundung und Sätze).
+    public var previousYearAmount: Decimal
+
+    public init(
+        year: Int,
+        interval: DateInterval,
+        months: [MonthBucket],
+        byClient: [ClientRow],
+        byProject: [ProjectReportRow],
+        tagShares: [TagShare],
+        total: TimeInterval,
+        billable: TimeInterval,
+        amount: Decimal,
+        business: TimeInterval,
+        personal: TimeInterval,
+        activeDays: Int,
+        averagePerActiveDay: TimeInterval,
+        previousYearTotal: TimeInterval,
+        previousYearAmount: Decimal
+    ) {
+        self.year = year
+        self.interval = interval
+        self.months = months
+        self.byClient = byClient
+        self.byProject = byProject
+        self.tagShares = tagShares
+        self.total = total
+        self.billable = billable
+        self.amount = amount
+        self.business = business
+        self.personal = personal
+        self.activeDays = activeDays
+        self.averagePerActiveDay = averagePerActiveDay
+        self.previousYearTotal = previousYearTotal
+        self.previousYearAmount = previousYearAmount
+    }
+
+    /// Höchstzahl einzeln aufgeführter Tags in `tagShares`.
+    public static let maxTagShares = 8
+}
+
+extension AppDatabase {
+    /// Jahresbericht in einer Leseabfrage (Jahr und Vorjahr). Monate, Projekte und Summen werden
+    /// wie in `report(for:…)` berechnet: Rundung je Eintrag nach dem Zuschneiden auf den jeweiligen
+    /// Zeitraum. Ein Eintrag über eine Monatsgrenze wird daher in den Monaten je Teil gerundet –
+    /// die Summe der Monatsbeträge kann um Cent-Beträge von `amount` abweichen.
+    public func yearReport(
+        year: Int,
+        rounding: Rounding,
+        defaultHourlyRate: Decimal? = nil,
+        now: Date = .now,
+        calendar: Calendar = .current
+    ) throws -> YearReport {
+        let interval = Self.yearInterval(year, calendar: calendar)
+        let previousInterval = Self.yearInterval(year - 1, calendar: calendar)
+        let (projects, entries, daysOff) = try writer.read { db in
+            (try Project.fetchAll(db),
+             try Self.entries(db, in: DateInterval(start: previousInterval.start, end: interval.end)),
+             try Self.daysOff(db, in: interval, calendar: calendar))
+        }
+
+        func overlapping(_ range: DateInterval) -> [TimeEntry] {
+            entries.filter { $0.startedAt < range.end && ($0.endedAt.map { $0 > range.start } ?? true) }
+        }
+        func makeReport(_ period: ReportPeriod, _ range: DateInterval) -> Report {
+            Self.makeReport(
+                period: period, interval: range, projects: projects, entries: overlapping(range),
+                rounding: rounding, defaultHourlyRate: defaultHourlyRate,
+                daysOff: daysOff.filter { day in
+                    guard let start = day.startOfDay(calendar: calendar) else { return false }
+                    return range.contains(start) && start < range.end
+                },
+                now: now, calendar: calendar
+            )
+        }
+
+        let whole = makeReport(.custom(interval), interval)
+        let previous = makeReport(.custom(previousInterval), previousInterval)
+
+        var months: [MonthBucket] = []
+        for month in 1...12 {
+            let start = calendar.date(from: DateComponents(year: year, month: month, day: 1)) ?? interval.start
+            let range = calendar.dateInterval(of: .month, for: start) ?? DateInterval(start: start, duration: 0)
+            let report = makeReport(.month(start), range)
+            months.append(MonthBucket(
+                month: range.start,
+                total: report.total,
+                billable: report.billable,
+                roundedBillable: report.roundedBillable,
+                business: report.business,
+                personal: report.personal,
+                amount: report.amount,
+                activeDays: report.activeDays
+            ))
+        }
+
+        return YearReport(
+            year: year,
+            interval: interval,
+            months: months,
+            byClient: Self.clientRows(whole.rows),
+            byProject: whole.rows,
+            tagShares: Self.tagShares(whole.rows, total: whole.total),
+            total: whole.total,
+            billable: whole.billable,
+            amount: whole.amount,
+            business: whole.business,
+            personal: whole.personal,
+            activeDays: whole.activeDays,
+            averagePerActiveDay: whole.averagePerActiveDay,
+            previousYearTotal: previous.total,
+            previousYearAmount: previous.amount
+        )
+    }
+
+    /// 1. Januar des Jahres bis 1. Januar des Folgejahres im Kalender.
+    static func yearInterval(_ year: Int, calendar: Calendar) -> DateInterval {
+        let start = calendar.date(from: DateComponents(year: year, month: 1, day: 1))
+            ?? Date(timeIntervalSinceReferenceDate: 0)
+        let end = calendar.date(from: DateComponents(year: year + 1, month: 1, day: 1))
+            ?? start.addingTimeInterval(365 * 24 * 3600)
+        return DateInterval(start: start, end: max(start, end))
+    }
+
+    /// Projektzeilen nach Kunde zusammengefasst.
+    static func clientRows(_ rows: [ProjectReportRow]) -> [ClientRow] {
+        struct Group {
+            var client: String?
+            var row: ClientRow
+            var firstIndex: Int
+        }
+        var groups: [String: Group] = [:]
+        // Zeilen sind nach Dauer sortiert: Die Schreibweise des größten Projekts gewinnt.
+        for (index, row) in rows.enumerated() {
+            let client = row.project.client.flatMap { name -> String? in
+                let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : trimmed
+            }
+            let key = client.map { foldedForSearch($0) } ?? ""
+            var group = groups[key] ?? Group(
+                client: client,
+                row: ClientRow(client: client, duration: 0, billableDuration: 0, amount: 0, projectCount: 0),
+                firstIndex: index
+            )
+            group.row.duration += row.duration
+            group.row.billableDuration += row.billableDuration
+            group.row.amount += row.amount ?? 0
+            group.row.projectCount += 1
+            groups[key] = group
+        }
+        return groups.values
+            .sorted { a, b in
+                if a.row.amount != b.row.amount { return a.row.amount > b.row.amount }
+                if a.row.duration != b.row.duration { return a.row.duration > b.row.duration }
+                if (a.client == nil) != (b.client == nil) { return b.client == nil }
+                return a.firstIndex < b.firstIndex
+            }
+            .map(\.row)
+    }
+
+    /// Tag-Anteile über alle Projekte (Tags genau wie gespeichert).
+    static func tagShares(_ rows: [ProjectReportRow], total: TimeInterval) -> [TagShare] {
+        guard total > 0 else { return [] }
+        var byTag: [String: TimeInterval] = [:]
+        var untagged: TimeInterval = 0
+        for tagRow in rows.flatMap(\.byTag) {
+            if let tag = tagRow.tag {
+                byTag[tag, default: 0] += tagRow.duration
+            } else {
+                untagged += tagRow.duration
+            }
+        }
+        let sorted = byTag
+            .filter { $0.value > 0 }
+            .sorted { a, b in
+                if a.value != b.value { return a.value > b.value }
+                return a.key.localizedStandardCompare(b.key) == .orderedAscending
+            }
+        var shares = sorted.prefix(YearReport.maxTagShares).map {
+            TagShare(tag: $0.key, duration: $0.value, fraction: $0.value / total)
+        }
+        let rest = sorted.dropFirst(YearReport.maxTagShares).reduce(0) { $0 + $1.value }
+        if rest > 0 {
+            shares.append(TagShare(tag: nil, duration: rest, fraction: rest / total, isOther: true))
+        }
+        if untagged > 0 {
+            shares.append(TagShare(tag: nil, duration: untagged, fraction: untagged / total))
+        }
+        return shares
+    }
+}
+
 // MARK: - Geldbeträge
 
 /// Rechenhilfen für Beträge. Gerechnet wird mit `Decimal`, gerundet kaufmännisch auf Cent.

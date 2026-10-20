@@ -114,6 +114,8 @@ public struct WidgetSnapshot: Sendable, Hashable {
     public let fixedProjectID: UUID?
     /// Ein-Projekt-Widget: ein anderes Projekt läuft gerade (dann ist `running` `nil`).
     public let fixedProjectRunningElsewhere: Bool
+    /// Pomodoro-Zustand aus `SharedSettings`, nur bei eingeschaltetem Modus.
+    public let pomodoro: PomodoroState?
 
     public init(
         running: RunningState?,
@@ -127,7 +129,8 @@ public struct WidgetSnapshot: Sendable, Hashable {
         breakReminderMinutes: Int? = nil,
         runningBudget: BudgetInfo? = nil,
         fixedProjectID: UUID? = nil,
-        fixedProjectRunningElsewhere: Bool = false
+        fixedProjectRunningElsewhere: Bool = false,
+        pomodoro: PomodoroState? = nil
     ) {
         self.running = running
         self.recent = recent
@@ -141,6 +144,7 @@ public struct WidgetSnapshot: Sendable, Hashable {
         self.runningBudget = runningBudget
         self.fixedProjectID = fixedProjectID
         self.fixedProjectRunningElsewhere = fixedProjectRunningElsewhere
+        self.pomodoro = pomodoro
     }
 
     public static let maxRecent = 3
@@ -149,7 +153,8 @@ public struct WidgetSnapshot: Sendable, Hashable {
     // MARK: Beispieldaten
 
     /// Beispieldaten für die Widget-Galerie und Vorschauen: „Kundenportal“ läuft seit 1:12
-    /// (Budget 12:30 von 40 h), geplant ist „Website“ zur übernächsten Viertelstunde.
+    /// (Budget 12:30 von 40 h), geplant ist „Website“ zur übernächsten Viertelstunde,
+    /// Pomodoro in Einheit 2 von 4 mit 23 Minuten Rest.
     public static let placeholder: WidgetSnapshot = {
         let now = Date.now
         let portal = Project(
@@ -210,7 +215,15 @@ public struct WidgetSnapshot: Sendable, Hashable {
             runningNextStep: "Login-Fehler im Staging nachstellen",
             plannedBlock: PlannedBlockInfo(project: website, startAt: plannedStart, note: "Deploy vorbereiten"),
             breakReminderMinutes: SharedSettings.defaultBreakReminderMinutes,
-            runningBudget: BudgetInfo(used: used, budget: 40 * 3600, completed: used - entry.duration(at: now))
+            runningBudget: BudgetInfo(used: used, budget: 40 * 3600, completed: used - entry.duration(at: now)),
+            pomodoro: PomodoroState(
+                enabled: true,
+                phase: .work,
+                phaseEndsAt: now.addingTimeInterval(23 * 60),
+                cycle: 2,
+                cyclesBeforeLongBreak: 4,
+                updatedAt: now
+            )
         )
     }()
 }
@@ -224,7 +237,8 @@ extension AppDatabase {
     ///     wenn dieses Projekt läuft (sonst `fixedProjectRunningElsewhere`), und `todayCompleted`,
     ///     `runningBudget` und `plannedBlock` beziehen sich nur auf dieses Projekt.
     ///     `todayEntries` bleibt vollständig (enthält `projectId` zum Filtern).
-    ///   - sharedDefaults: Suite, aus der die Pausenerinnerung gelesen wird (für Tests injizierbar).
+    ///   - sharedDefaults: Suite, aus der Pausenerinnerung und Pomodoro-Zustand gelesen werden
+    ///     (für Tests injizierbar).
     public func widgetSnapshot(
         now: Date = .now,
         calendar: Calendar = .current,
@@ -234,6 +248,7 @@ extension AppDatabase {
         let today = calendar.dateInterval(of: .day, for: now)
             ?? DateInterval(start: calendar.startOfDay(for: now), duration: 24 * 3600)
         let breakReminderMinutes = SharedSettings.breakReminderMinutesIfEnabled(in: sharedDefaults)
+        let pomodoro = SharedSettings.pomodoroIfEnabled(in: sharedDefaults)
 
         return try writer.read { db in
             let projectsById = Dictionary(
@@ -319,7 +334,8 @@ extension AppDatabase {
                 breakReminderMinutes: breakReminderMinutes,
                 runningBudget: budget,
                 fixedProjectID: fixedProjectID,
-                fixedProjectRunningElsewhere: runningElsewhere
+                fixedProjectRunningElsewhere: runningElsewhere,
+                pomodoro: pomodoro
             )
         }
     }

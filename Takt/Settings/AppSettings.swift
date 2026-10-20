@@ -66,6 +66,9 @@ final class AppSettings {
             defaults.set(pomodoroEnabled, forKey: Key.pomodoroEnabled)
             // Bei aktivem Pomodoro zeigt das Widget keinen Pausenfortschritt der normalen Erinnerung.
             SharedSettings.breakReminderEnabled = breakReminderEnabled && !pomodoroEnabled
+            // Ausgeschaltet: kein Pomodoro-Zustand mehr im Widget (den Zustand schreibt sonst
+            // `PomodoroController` bei jedem Phasenwechsel).
+            if !pomodoroEnabled { SharedSettings.clearPomodoro() }
             if pomodoroEnabled != oldValue { WidgetCenter.shared.reloadAllTimelines() }
         }
     }
@@ -183,6 +186,77 @@ final class AppSettings {
     /// (`SharedSettings`), damit die Widget-Extension sie lesen kann.
     var widgetStyle: WidgetStyle { didSet { SharedSettings.widgetStyle = widgetStyle } }
 
+    // MARK: Kalender (v5)
+
+    /// Kalenderereignisse in „Heute“ anzeigen. Aus, bis die Berechtigung erteilt ist.
+    var calendarShowEvents: Bool {
+        didSet { defaults.set(calendarShowEvents, forKey: Key.calendarShowEvents) }
+    }
+    /// Angezeigte Kalender (`EKCalendar.calendarIdentifier`); leer = alle.
+    var calendarVisibleIDs: [String] {
+        didSet { defaults.set(calendarVisibleIDs, forKey: Key.calendarVisibleIDs) }
+    }
+    /// Abgeschlossene Einträge in einen Kalender spiegeln.
+    var calendarMirrorEnabled: Bool {
+        didSet { defaults.set(calendarMirrorEnabled, forKey: Key.calendarMirrorEnabled) }
+    }
+    /// Zielkalender der Spiegelung; `nil` = noch keiner gewählt.
+    var calendarMirrorCalendarID: String? {
+        didSet {
+            if let calendarMirrorCalendarID, !calendarMirrorCalendarID.isEmpty {
+                defaults.set(calendarMirrorCalendarID, forKey: Key.calendarMirrorCalendarID)
+            } else {
+                defaults.removeObject(forKey: Key.calendarMirrorCalendarID)
+            }
+        }
+    }
+    /// Kürzere Einträge werden nicht gespiegelt (1–240 Minuten, Standard 5).
+    var calendarMirrorMinimumMinutes: Int {
+        didSet { defaults.set(calendarMirrorMinimumMinutes, forKey: Key.calendarMirrorMinimumMinutes) }
+    }
+
+    // MARK: Aktivität (v5)
+
+    /// Projektvorschläge aus der beobachteten Aktivität (App, Fenster, Repository).
+    var activitySuggestionsEnabled: Bool {
+        didSet { defaults.set(activitySuggestionsEnabled, forKey: Key.activitySuggestionsEnabled) }
+    }
+    /// Minuten, die die Aktivität zu einem anderen Projekt passen muss, bevor Takt nachfragt
+    /// (1–120, Standard 10).
+    var activityMismatchMinutes: Int {
+        didSet { defaults.set(activityMismatchMinutes, forKey: Key.activityMismatchMinutes) }
+    }
+    /// Ohne laufenden Timer bei passender Aktivität automatisch starten.
+    var activityAutoStartEnabled: Bool {
+        didSet { defaults.set(activityAutoStartEnabled, forKey: Key.activityAutoStartEnabled) }
+    }
+
+    // MARK: Budget (v5)
+
+    /// Hinweis, wenn ein Projekt 80 % bzw. 100 % seines Stundenbudgets erreicht.
+    var budgetWarningsEnabled: Bool {
+        didSet { defaults.set(budgetWarningsEnabled, forKey: Key.budgetWarningsEnabled) }
+    }
+
+    // MARK: Schnelleingabe überall (v5)
+
+    /// Globaler Kurzbefehl für die Schnelleingabe.
+    var quickEntryHotKeyEnabled: Bool {
+        didSet { defaults.set(quickEntryHotKeyEnabled, forKey: Key.quickEntryHotKeyEnabled) }
+    }
+    /// Virtueller Tastencode (Carbon `kVK_…`); Standard 45 = „N“.
+    var quickEntryHotKeyKeyCode: Int {
+        didSet { defaults.set(quickEntryHotKeyKeyCode, forKey: Key.quickEntryHotKeyKeyCode) }
+    }
+    /// Modifikatoren als `NSEvent.ModifierFlags.rawValue`; Standard ⌃⌥⌘.
+    var quickEntryHotKeyModifiers: UInt {
+        didSet { defaults.set(quickEntryHotKeyModifiers, forKey: Key.quickEntryHotKeyModifiers) }
+    }
+    /// Eingabefeld für die Schnelleingabe im Menüleisten-Popover.
+    var quickEntryInMenuBar: Bool {
+        didSet { defaults.set(quickEntryInMenuBar, forKey: Key.quickEntryInMenuBar) }
+    }
+
     // MARK: Interna
 
     @ObservationIgnored private let defaults: UserDefaults
@@ -215,11 +289,27 @@ final class AppSettings {
         static let pomodoroCyclesBeforeLongBreak = "settings.pomodoroCyclesBeforeLongBreak"
         static let pomodoroAutoStopTimer = "settings.pomodoroAutoStopTimer"
         static let weeklyGoalHours = "settings.weeklyGoalHours"
+        static let calendarShowEvents = "settings.calendarShowEvents"
+        static let calendarVisibleIDs = "settings.calendarVisibleIDs"
+        static let calendarMirrorEnabled = "settings.calendarMirrorEnabled"
+        static let calendarMirrorCalendarID = "settings.calendarMirrorCalendarID"
+        static let calendarMirrorMinimumMinutes = "settings.calendarMirrorMinimumMinutes"
+        static let activitySuggestionsEnabled = "settings.activitySuggestionsEnabled"
+        static let activityMismatchMinutes = "settings.activityMismatchMinutes"
+        static let activityAutoStartEnabled = "settings.activityAutoStartEnabled"
+        static let budgetWarningsEnabled = "settings.budgetWarningsEnabled"
+        static let quickEntryHotKeyEnabled = "settings.quickEntryHotKeyEnabled"
+        static let quickEntryHotKeyKeyCode = "settings.quickEntryHotKeyKeyCode"
+        static let quickEntryHotKeyModifiers = "settings.quickEntryHotKeyModifiers"
+        static let quickEntryInMenuBar = "settings.quickEntryInMenuBar"
     }
 
     /// Standard-Kurzbefehl: ⌃⌥⌘T.
     static let defaultShortcutKeyCode = 17
     static let defaultShortcutModifiers = NSEvent.ModifierFlags([.control, .option, .command]).rawValue
+    /// Standard-Kurzbefehl der Schnelleingabe: ⌃⌥⌘N.
+    static let defaultQuickEntryKeyCode = 45
+    static let defaultQuickEntryModifiers = defaultShortcutModifiers
     static let defaultCurrencyCode = "EUR"
     private static let posix = Locale(identifier: "en_US_POSIX")
 
@@ -251,6 +341,18 @@ final class AppSettings {
             Key.pomodoroLongBreakMinutes: 20,
             Key.pomodoroCyclesBeforeLongBreak: 4,
             Key.pomodoroAutoStopTimer: true,
+            Key.calendarShowEvents: false,
+            Key.calendarVisibleIDs: [String](),
+            Key.calendarMirrorEnabled: false,
+            Key.calendarMirrorMinimumMinutes: 5,
+            Key.activitySuggestionsEnabled: false,
+            Key.activityMismatchMinutes: 10,
+            Key.activityAutoStartEnabled: false,
+            Key.budgetWarningsEnabled: true,
+            Key.quickEntryHotKeyEnabled: true,
+            Key.quickEntryHotKeyKeyCode: Self.defaultQuickEntryKeyCode,
+            Key.quickEntryHotKeyModifiers: Self.defaultQuickEntryModifiers,
+            Key.quickEntryInMenuBar: true,
         ])
 
         musicEnabled = defaults.bool(forKey: Key.musicEnabled)
@@ -289,10 +391,28 @@ final class AppSettings {
         weeklyGoalHours = (defaults.object(forKey: Key.weeklyGoalHours) as? NSNumber)
             .flatMap { SharedSettings.validWeeklyGoalHours($0.doubleValue) }
 
+        calendarShowEvents = defaults.bool(forKey: Key.calendarShowEvents)
+        calendarVisibleIDs = defaults.stringArray(forKey: Key.calendarVisibleIDs) ?? []
+        calendarMirrorEnabled = defaults.bool(forKey: Key.calendarMirrorEnabled)
+        let storedMirrorCalendar = defaults.string(forKey: Key.calendarMirrorCalendarID)
+        calendarMirrorCalendarID = (storedMirrorCalendar?.isEmpty ?? true) ? nil : storedMirrorCalendar
+        calendarMirrorMinimumMinutes = Self.clamp(defaults.integer(forKey: Key.calendarMirrorMinimumMinutes), 1...240, fallback: 5)
+        activitySuggestionsEnabled = defaults.bool(forKey: Key.activitySuggestionsEnabled)
+        activityMismatchMinutes = Self.clamp(defaults.integer(forKey: Key.activityMismatchMinutes), 1...120, fallback: 10)
+        activityAutoStartEnabled = defaults.bool(forKey: Key.activityAutoStartEnabled)
+        budgetWarningsEnabled = defaults.bool(forKey: Key.budgetWarningsEnabled)
+        quickEntryHotKeyEnabled = defaults.bool(forKey: Key.quickEntryHotKeyEnabled)
+        quickEntryHotKeyKeyCode = Self.clamp(defaults.integer(forKey: Key.quickEntryHotKeyKeyCode), 0...127,
+                                             fallback: Self.defaultQuickEntryKeyCode)
+        let storedQuickModifiers = (defaults.object(forKey: Key.quickEntryHotKeyModifiers) as? NSNumber)?.uintValue ?? 0
+        quickEntryHotKeyModifiers = storedQuickModifiers == 0 ? Self.defaultQuickEntryModifiers : storedQuickModifiers
+        quickEntryInMenuBar = defaults.bool(forKey: Key.quickEntryInMenuBar)
+
         // `didSet` greift in `init` nicht: Pausenerinnerung und Wochenziel einmal beim Start für das Widget spiegeln.
         SharedSettings.breakReminderEnabled = breakReminderEnabled && !pomodoroEnabled
         SharedSettings.breakReminderMinutes = breakReminderMinutes
         SharedSettings.weeklyGoalHours = weeklyGoalHours
+        if !pomodoroEnabled { SharedSettings.clearPomodoro() }
     }
 
     /// Großgeschriebener Code, wenn `text` aus genau drei Buchstaben A–Z besteht, sonst `nil`.

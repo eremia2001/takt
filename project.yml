@@ -45,6 +45,8 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         LSApplicationCategoryType: public.app-category.productivity
         NSAppleEventsUsageDescription: Takt steuert Spotify und die Musik-App, um beim Start eines Timers Musik abzuspielen.
+        NSCalendarsFullAccessUsageDescription: Takt zeigt deine Termine in der Tagesleiste und kann erfasste Zeiten in einen Kalender „Takt“ eintragen.
+        NSCalendarsUsageDescription: Takt zeigt deine Termine in der Tagesleiste und kann erfasste Zeiten in einen Kalender „Takt“ eintragen.
         NSHumanReadableCopyright: ""
         CFBundleURLTypes:
           - CFBundleURLName: dev.eremiya.takt

@@ -67,7 +67,7 @@ public final class AppDatabase: Sendable {
     }
 
     /// Alle Migrationen. `internal`, damit Tests ältere Stände aufbauen können
-    /// (`migrator.migrate(writer, upTo: "v1")`, `"v2"`, `"v3"`).
+    /// (`migrator.migrate(writer, upTo: "v1")`, … `"v4"`).
     static var migrator: DatabaseMigrator {
         // Bewusst ohne `eraseDatabaseOnSchemaChange`: echte Zeitdaten nie automatisch löschen.
         var migrator = DatabaseMigrator()
@@ -159,6 +159,64 @@ public final class AppDatabase: Sendable {
                 t.column("date", .text).notNull().unique()
                 t.column("kind", .text).notNull()  // Rohwert von `DayOffKind`
                 t.column("note", .text)
+            }
+        }
+
+        // v5: Datenbasis für Kalender-Anbindung und Aktivitäts-Erkennung.
+        migrator.registerMigration("v5") { db in
+            // Letzte Änderung je Eintrag (für die Kalender-Spiegelung). Altbestände: Beginn.
+            try db.alter(table: "timeEntry") { t in
+                t.add(column: "updatedAt", .double).notNull().defaults(to: 0)
+            }
+            try db.execute(sql: "UPDATE timeEntry SET updatedAt = startedAt")
+
+            // Gespiegeltes Kalenderereignis je Eintrag (EventKit-Kennungen).
+            try db.create(table: "calendarEventLink") { t in
+                t.primaryKey("entryId", .blob)
+                    .references("timeEntry", column: "id", onDelete: .cascade)
+                t.column("eventIdentifier", .text).notNull()
+                t.column("calendarIdentifier", .text).notNull()
+                t.column("updatedAt", .double).notNull()
+            }
+
+            // Regeln Kalenderereignis → Projekt.
+            try db.create(table: "calendarRule") { t in
+                t.primaryKey("id", .blob)
+                t.column("kind", .text).notNull()  // Rohwert von `CalendarRuleKind`
+                t.column("pattern", .text).notNull()
+                t.column("projectId", .blob)
+                    .notNull()
+                    .indexed()
+                    .references("project", column: "id", onDelete: .cascade)
+                t.column("sortOrder", .integer).notNull().defaults(to: 0)
+                t.column("createdAt", .double).notNull()
+            }
+
+            // Regeln App/Fenster/Repository → Projekt.
+            try db.create(table: "activityRule") { t in
+                t.primaryKey("id", .blob)
+                t.column("kind", .text).notNull()  // Rohwert von `ActivityRuleKind`
+                t.column("pattern", .text).notNull()
+                t.column("projectId", .blob)
+                    .notNull()
+                    .indexed()
+                    .references("project", column: "id", onDelete: .cascade)
+                t.column("sortOrder", .integer).notNull().defaults(to: 0)
+                t.column("createdAt", .double).notNull()
+            }
+
+            // Beobachtete Aktivität (höchstens 30 Tage), Grundlage für Vorschläge.
+            try db.create(table: "activitySample") { t in
+                t.primaryKey("id", .blob)
+                t.column("startedAt", .double).notNull().indexed()
+                t.column("endedAt", .double).notNull().indexed()
+                t.column("bundleID", .text).notNull()
+                t.column("windowTitle", .text)
+                t.column("repoPath", .text)
+                // Ein gelöschtes Projekt macht die Probe nur „unbekannt“.
+                t.column("projectId", .blob)
+                    .indexed()
+                    .references("project", column: "id", onDelete: .setNull)
             }
         }
 

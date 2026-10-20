@@ -24,8 +24,15 @@ struct SettingsView: View {
             Tab("Abrechnung", systemImage: "eurosign.circle") {
                 SettingsPage { BillingSettingsSection() }
             }
+            Tab("Kalender", systemImage: "calendar") {
+                SettingsPage { CalendarSettingsSection() }
+            }
+            Tab("Aktivität", systemImage: "sparkles") {
+                SettingsPage { ActivitySettingsSection() }
+            }
         }
-        .frame(width: 500, height: 420)
+        // 560 statt 500: Platz für sieben Reiter.
+        .frame(width: 560, height: 420)
     }
 }
 

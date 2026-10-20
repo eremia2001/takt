@@ -28,6 +28,75 @@ public enum WidgetStyle: String, CaseIterable, Codable, Sendable {
     }
 }
 
+/// Zustand des Pomodoro-Modus für das Widget. Die App schreibt ihn bei jedem Phasenwechsel nach
+/// `SharedSettings.pomodoro`; das Widget rechnet die Restzeit aus `phaseEndsAt` selbst.
+public struct PomodoroState: Codable, Sendable, Hashable {
+    public enum Phase: String, Codable, Sendable, CaseIterable {
+        case work
+        case shortBreak
+        case longBreak
+        /// Modus an, aber gerade keine Einheit und keine Pause.
+        case idle
+
+        /// Unbekannte Werte (z. B. aus einer neueren App-Version) werden zu `.idle`.
+        public init(from decoder: Decoder) throws {
+            let raw = try decoder.singleValueContainer().decode(String.self)
+            self = Phase(rawValue: raw) ?? .idle
+        }
+
+        public var isBreak: Bool { self == .shortBreak || self == .longBreak }
+
+        /// Deutscher Name für die Oberfläche.
+        public var title: String {
+            switch self {
+            case .work: "Arbeit"
+            case .shortBreak: "Pause"
+            case .longBreak: "Lange Pause"
+            case .idle: "Bereit"
+            }
+        }
+    }
+
+    /// Pomodoro-Modus eingeschaltet (`AppSettings.pomodoroEnabled`).
+    public var enabled: Bool
+    public var phase: Phase
+    /// Ende der laufenden Phase; `nil` bei `.idle`.
+    public var phaseEndsAt: Date?
+    /// Nummer der aktuellen bzw. zuletzt begonnenen Arbeitseinheit, ab 1.
+    public var cycle: Int
+    /// Einheiten bis zur langen Pause.
+    public var cyclesBeforeLongBreak: Int
+    /// Zeitpunkt, zu dem die App den Zustand geschrieben hat.
+    public var updatedAt: Date
+
+    public init(
+        enabled: Bool,
+        phase: Phase,
+        phaseEndsAt: Date? = nil,
+        cycle: Int = 1,
+        cyclesBeforeLongBreak: Int = 4,
+        updatedAt: Date = .now
+    ) {
+        self.enabled = enabled
+        self.phase = phase
+        self.phaseEndsAt = phaseEndsAt
+        self.cycle = cycle
+        self.cyclesBeforeLongBreak = cyclesBeforeLongBreak
+        self.updatedAt = updatedAt
+    }
+
+    /// Restzeit der Phase zu `date`, nie negativ; `nil` ohne Phasenende.
+    public func remaining(at date: Date) -> TimeInterval? {
+        phaseEndsAt.map { max(0, $0.timeIntervalSince(date)) }
+    }
+
+    /// Phase läuft zu `date` noch (Ende in der Zukunft).
+    public func isActive(at date: Date) -> Bool {
+        guard phase != .idle, let phaseEndsAt else { return false }
+        return phaseEndsAt > date
+    }
+}
+
 /// Einstellungen, die App und Widget-Extension teilen – in der `UserDefaults`-Suite der App Group.
 /// Die App schreibt (`AppSettings` spiegelt seine Werte hierher), das Widget liest nur.
 public enum SharedSettings {
@@ -38,6 +107,8 @@ public enum SharedSettings {
     public static let breakReminderMinutesKey = "breakReminderMinutes"
     /// Schlüssel des Wochenziels in Stunden (Spiegel von `AppSettings`).
     public static let weeklyGoalHoursKey = "weeklyGoalHours"
+    /// Schlüssel des Pomodoro-Zustands (JSON von `PomodoroState`).
+    public static let pomodoroKey = "pomodoroState"
 
     /// Standarddauer bis zur Pausenerinnerung in Minuten.
     public static let defaultBreakReminderMinutes = 75
@@ -135,5 +206,38 @@ public enum SharedSettings {
     /// `hours`, falls 0 < hours ≤ 168 (eine Woche), sonst `nil`.
     public static func validWeeklyGoalHours(_ hours: Double) -> Double? {
         hours.isFinite && hours > 0 && hours <= 168 ? hours : nil
+    }
+
+    // MARK: Pomodoro
+
+    /// Pomodoro-Zustand für das Widget; `nil` = nie geschrieben oder gelöscht.
+    public static var pomodoro: PomodoroState? {
+        get { pomodoro(in: defaults) }
+        set { setPomodoro(newValue, in: defaults) }
+    }
+
+    /// Fehlende oder unlesbare Werte ergeben `nil`.
+    public static func pomodoro(in defaults: UserDefaults) -> PomodoroState? {
+        guard let data = defaults.data(forKey: pomodoroKey) else { return nil }
+        return try? JSONDecoder().decode(PomodoroState.self, from: data)
+    }
+
+    /// Schreibt den Zustand als JSON; `nil` entfernt ihn.
+    public static func setPomodoro(_ state: PomodoroState?, in defaults: UserDefaults) {
+        guard let state, let data = try? JSONEncoder().encode(state) else {
+            defaults.removeObject(forKey: pomodoroKey)
+            return
+        }
+        defaults.set(data, forKey: pomodoroKey)
+    }
+
+    /// Entfernt den Pomodoro-Zustand (z. B. beim Ausschalten des Modus).
+    public static func clearPomodoro(in defaults: UserDefaults = SharedSettings.defaults) {
+        defaults.removeObject(forKey: pomodoroKey)
+    }
+
+    /// Zustand für `WidgetSnapshot`: nur bei eingeschaltetem Modus.
+    public static func pomodoroIfEnabled(in defaults: UserDefaults) -> PomodoroState? {
+        pomodoro(in: defaults).flatMap { $0.enabled ? $0 : nil }
     }
 }

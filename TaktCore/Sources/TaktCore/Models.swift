@@ -130,7 +130,13 @@ public struct TimeEntry: Codable, Identifiable, Hashable, Sendable, FetchableRec
     /// Freie Kennzeichnung, z. B. „Meeting“, „Bugfix“, „Review“ (höchstens eine je Eintrag).
     /// Beim Speichern über `addEntry`/`updateEntry`/`startTimer` normalisiert, siehe `normalizedTag`.
     public var tag: String?
+    /// Zeitpunkt der letzten Änderung (seit v5). Wird von `addEntry`, `updateEntry`, `startTimer`
+    /// und `stopTimer` auf „jetzt“ gesetzt; Altbestände bekommen bei der Migration `startedAt`.
+    /// Grundlage für die Kalender-Spiegelung (`entriesNeedingMirror`).
+    public var updatedAt: Date
 
+    /// - Parameter updatedAt: `nil` = `startedAt` (wie bei Altbeständen); beim Speichern über das
+    ///   Repository ohnehin überschrieben.
     public init(
         id: UUID = UUID(),
         projectId: UUID,
@@ -138,7 +144,8 @@ public struct TimeEntry: Codable, Identifiable, Hashable, Sendable, FetchableRec
         endedAt: Date? = nil,
         nextStep: String? = nil,
         isBillable: Bool? = nil,
-        tag: String? = nil
+        tag: String? = nil,
+        updatedAt: Date? = nil
     ) {
         self.id = id
         self.projectId = projectId
@@ -147,6 +154,7 @@ public struct TimeEntry: Codable, Identifiable, Hashable, Sendable, FetchableRec
         self.nextStep = nextStep
         self.isBillable = isBillable
         self.tag = tag
+        self.updatedAt = updatedAt ?? startedAt
     }
 
     /// Höchstlänge eines Tags in Zeichen.
@@ -183,6 +191,7 @@ public struct TimeEntry: Codable, Identifiable, Hashable, Sendable, FetchableRec
         public static let nextStep = Column(CodingKeys.nextStep)
         public static let isBillable = Column(CodingKeys.isBillable)
         public static let tag = Column(CodingKeys.tag)
+        public static let updatedAt = Column(CodingKeys.updatedAt)
     }
 }
 
@@ -373,6 +382,8 @@ public enum TaktError: Error, Equatable, Sendable, LocalizedError {
     case timerAlreadyRunning
     case entryNotFound
     case projectNotFound
+    /// Eine Regel (Kalender, Aktivität) ohne Suchmuster.
+    case emptyPattern
 
     public var errorDescription: String? {
         switch self {
@@ -380,6 +391,7 @@ public enum TaktError: Error, Equatable, Sendable, LocalizedError {
         case .timerAlreadyRunning: "Es läuft bereits ein Timer."
         case .entryNotFound: "Der Eintrag existiert nicht."
         case .projectNotFound: "Das Projekt existiert nicht."
+        case .emptyPattern: "Die Regel braucht ein Suchmuster."
         }
     }
 }

@@ -35,6 +35,10 @@
 	<string>public.app-category.productivity</string>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>Takt steuert Spotify und die Musik-App, um beim Start eines Timers Musik abzuspielen.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Takt zeigt deine Termine in der Tagesleiste und kann erfasste Zeiten in einen Kalender „Takt“ eintragen.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>Takt zeigt deine Termine in der Tagesleiste und kann erfasste Zeiten in einen Kalender „Takt“ eintragen.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string></string>
 </dict>

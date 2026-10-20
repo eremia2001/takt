@@ -18,6 +18,27 @@ public struct FocusStats: Hashable, Sendable {
     }
 }
 
+/// Budgetverbrauch eines Projekts (siehe `budgetUsages(now:)`).
+public struct BudgetUsage: Hashable, Sendable {
+    public var project: Project
+    /// Verbrauchte Zeit über alle Einträge, laufender bis zum Abfragezeitpunkt.
+    public var used: TimeInterval
+    /// Budget in Sekunden, immer > 0.
+    public var budget: TimeInterval
+    /// `used / budget` (1 = erreicht, darüber = überzogen).
+    public var fraction: Double
+
+    public init(project: Project, used: TimeInterval, budget: TimeInterval) {
+        self.project = project
+        self.used = used
+        self.budget = budget
+        self.fraction = budget > 0 ? used / budget : 0
+    }
+
+    /// Verbleibende Zeit, nie negativ.
+    public var remaining: TimeInterval { max(0, budget - used) }
+}
+
 // MARK: - Öffentliche API
 
 extension AppDatabase {
@@ -98,14 +119,16 @@ extension AppDatabase {
                 if running.projectId == projectId {
                     if let tag, running.tag != tag {
                         running.tag = tag
+                        running.updatedAt = now
                         try running.update(db)
                     }
                     return running
                 }
                 running.endedAt = max(now, running.startedAt)
+                running.updatedAt = now
                 try running.update(db)
             }
-            let entry = TimeEntry(projectId: projectId, startedAt: now, tag: tag)
+            let entry = TimeEntry(projectId: projectId, startedAt: now, tag: tag, updatedAt: now)
             try entry.insert(db)
             return entry
         }
@@ -116,18 +139,20 @@ extension AppDatabase {
     /// Gibt `nil` zurück, wenn nichts lief.
     @discardableResult
     public func stopTimer(nextStep: String? = nil, now: Date = .now) throws -> TimeEntry? {
-        try stopTimer(at: now, nextStep: nextStep)
+        try stopTimer(at: now, nextStep: nextStep, now: now)
     }
 
     /// Beendet den laufenden Timer mit ausdrücklichem Ende, z. B. „Leerlauf abziehen“ (Ende =
     /// Beginn des Leerlaufs). Liegt `end` vor dem Start, endet der Eintrag bei seinem Start
-    /// (Dauer 0). `nextStep` wie bei `stopTimer(nextStep:now:)`. Gibt `nil` zurück, wenn nichts lief.
+    /// (Dauer 0). `nextStep` wie bei `stopTimer(nextStep:now:)`. `now` ist der Änderungszeitpunkt
+    /// (`updatedAt`), nicht das Ende. Gibt `nil` zurück, wenn nichts lief.
     @discardableResult
-    public func stopTimer(at end: Date, nextStep: String?) throws -> TimeEntry? {
+    public func stopTimer(at end: Date, nextStep: String?, now: Date = .now) throws -> TimeEntry? {
         try writer.write { db in
             guard var running = try Self.activeEntry(db) else { return nil }
             running.endedAt = max(end, running.startedAt)
             running.nextStep = Self.normalizedNote(nextStep) ?? running.nextStep
+            running.updatedAt = now
             try running.update(db)
             return running
         }
@@ -203,6 +228,34 @@ extension AppDatabase {
         }
     }
 
+    /// Verbrauch aller aktiven (nicht archivierten) Projekte mit Budget > 0, in manueller
+    /// Reihenfolge – für Budget-Warnungen. Laufende Einträge zählen bis `now`.
+    public func budgetUsages(now: Date = .now) throws -> [BudgetUsage] {
+        try writer.read { db in
+            let projects = try Project
+                .filter(Project.Columns.isArchived == false)
+                .order(Project.Columns.sortOrder, Project.Columns.name)
+                .fetchAll(db)
+                .filter { $0.budgetInterval != nil }
+            guard !projects.isEmpty else { return [] }
+            // Eine Abfrage für alle Projekte statt einer je Projekt.
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT projectId, TOTAL(MAX(0, COALESCE(endedAt, ?) - startedAt)) AS used
+                FROM timeEntry
+                GROUP BY projectId
+                """, arguments: [now.databaseTime])
+            var usedById: [UUID: TimeInterval] = [:]
+            for row in rows {
+                let id: UUID = row["projectId"]
+                usedById[id] = row["used"]
+            }
+            return projects.compactMap { project in
+                guard let budget = project.budgetInterval else { return nil }
+                return BudgetUsage(project: project, used: usedById[project.id] ?? 0, budget: budget)
+            }
+        }
+    }
+
     // MARK: Einträge
 
     /// Alle Einträge, die sich mit dem Intervall überschneiden (laufende eingeschlossen),
@@ -211,23 +264,26 @@ extension AppDatabase {
         try writer.read { db in try Self.entries(db, in: interval) }
     }
 
-    /// Legt einen Eintrag manuell an. Der Tag wird normalisiert (`TimeEntry.normalizedTag`).
+    /// Legt einen Eintrag manuell an. Der Tag wird normalisiert (`TimeEntry.normalizedTag`),
+    /// `updatedAt` auf `now` gesetzt.
     /// - Throws: `TaktError.endBeforeStart`, `.timerAlreadyRunning` (Eintrag ohne Ende, obwohl
     ///   schon einer läuft), `.projectNotFound`.
-    public func addEntry(_ entry: TimeEntry) throws {
+    public func addEntry(_ entry: TimeEntry, now: Date = .now) throws {
         var entry = entry
         entry.tag = TimeEntry.normalizedTag(entry.tag)
+        entry.updatedAt = now
         try writer.write { db in
             try Self.validate(entry, db)
             try entry.insert(db)
         }
     }
 
-    /// Aktualisiert einen bestehenden Eintrag (Validierung und Tag wie bei `addEntry`).
+    /// Aktualisiert einen bestehenden Eintrag (Validierung, Tag und `updatedAt` wie bei `addEntry`).
     /// - Throws: zusätzlich `TaktError.entryNotFound`.
-    public func updateEntry(_ entry: TimeEntry) throws {
+    public func updateEntry(_ entry: TimeEntry, now: Date = .now) throws {
         var entry = entry
         entry.tag = TimeEntry.normalizedTag(entry.tag)
+        entry.updatedAt = now
         try writer.write { db in
             guard try TimeEntry.exists(db, id: entry.id) else { throw TaktError.entryNotFound }
             try Self.validate(entry, db)

@@ -32,6 +32,10 @@ final class TaktStore {
     /// Verbrauchte Zeit in abgeschlossenen Einträgen (alle Tage) je Projekt mit Stundenbudget.
     /// Der laufende Eintrag fehlt hier; siehe `budgetUsed(projectId:at:)`.
     private(set) var budgetCompleted: [UUID: TimeInterval] = [:]
+    /// Kalender-Regeln in Prüfreihenfolge (v5).
+    private(set) var calendarRules: [CalendarRule] = []
+    /// Aktivitäts-Regeln in Prüfreihenfolge (v5).
+    private(set) var activityRules: [ActivityRule] = []
     /// Letzte Fehlermeldung; die Oberfläche zeigt sie als Hinweis an.
     var lastError: String?
 
@@ -127,6 +131,8 @@ final class TaktStore {
             }
 
             let focus = try database.focusStats(in: today, now: now)
+            let calRules = try database.calendarRules()
+            let actRules = try database.activityRules()
             var lastUsed: Project?
             if runningState == nil {
                 lastUsed = try Self.lastUsedProject(database, todayEntries: entries, byId: byId, now: now)
@@ -144,6 +150,8 @@ final class TaktStore {
             if todayFocus != focus { todayFocus = focus }
             if lastUsedProject != lastUsed { lastUsedProject = lastUsed }
             if budgetCompleted != budgets { budgetCompleted = budgets }
+            if calendarRules != calRules { calendarRules = calRules }
+            if activityRules != actRules { activityRules = actRules }
             let blockName = block.flatMap { byId[$0.projectId]?.name }
             let blockChanged = plannedBlock != block || notifiedPlannedName != blockName
             if plannedBlock != block { plannedBlock = block }
@@ -436,6 +444,137 @@ final class TaktStore {
         return ok ? inserted : nil
     }
 
+    // MARK: Jahresbericht & Budget (v5)
+
+    /// Jahresbericht (Monate, Kunden, Projekte, Tags, Vorjahr); bei Fehlern `nil` (Meldung in `lastError`).
+    func yearReport(year: Int, rounding: Rounding, defaultHourlyRate: Decimal?, now: Date = .now) -> YearReport? {
+        read { try $0.yearReport(year: year, rounding: rounding, defaultHourlyRate: defaultHourlyRate, now: now) }
+    }
+
+    /// Budgetverbrauch aller aktiven Projekte mit Budget (für Budget-Warnungen); bei Fehlern leer.
+    func budgetUsages(now: Date = .now) -> [BudgetUsage] {
+        read { try $0.budgetUsages(now: now) } ?? []
+    }
+
+    // MARK: Kalender (v5)
+
+    func calendarLink(entryId: UUID) -> CalendarEventLink? {
+        read { try $0.calendarLink(entryId: entryId) } ?? nil
+    }
+
+    /// Merkt sich das gespiegelte Ereignis eines Eintrags (ersetzt eine vorhandene Verknüpfung).
+    @discardableResult
+    func setCalendarLink(_ link: CalendarEventLink) -> Bool {
+        write(reloadWidgets: false) { try $0.setCalendarLink(link) }
+    }
+
+    @discardableResult
+    func removeCalendarLink(entryId: UUID) -> Bool {
+        write(reloadWidgets: false) { try $0.removeCalendarLink(entryId: entryId) }
+    }
+
+    /// Abgeschlossene Einträge, die (neu) gespiegelt werden müssen; bei Fehlern leer.
+    func entriesNeedingMirror(since: Date, minimumDuration: TimeInterval) -> [TimeEntry] {
+        read { try $0.entriesNeedingMirror(since: since, minimumDuration: minimumDuration) } ?? []
+    }
+
+    /// Entfernt verwaiste Verknüpfungen und gibt sie zurück (deren Ereignisse löscht der Aufrufer).
+    @discardableResult
+    func removeOrphanCalendarLinks() -> [CalendarEventLink] {
+        var removed: [CalendarEventLink] = []
+        write(reloadWidgets: false) { removed = try $0.removeOrphanLinks() }
+        return removed
+    }
+
+    @discardableResult
+    func addCalendarRule(kind: CalendarRuleKind, pattern: String, projectId: UUID) -> Bool {
+        write(reloadWidgets: false) { try $0.addCalendarRule(kind: kind, pattern: pattern, projectId: projectId) }
+    }
+
+    @discardableResult
+    func saveCalendarRule(_ rule: CalendarRule) -> Bool {
+        write(reloadWidgets: false) { try $0.saveCalendarRule(rule) }
+    }
+
+    @discardableResult
+    func deleteCalendarRule(_ rule: CalendarRule) -> Bool {
+        write(reloadWidgets: false) { try $0.deleteCalendarRule(id: rule.id) }
+    }
+
+    /// Verschiebt Kalender-Regeln (Signatur passend zu `onMove`).
+    func reorderCalendarRules(fromOffsets source: IndexSet, toOffset destination: Int) {
+        var reordered = calendarRules
+        reordered.move(fromOffsets: source, toOffset: destination)
+        calendarRules = reordered
+        write(reloadWidgets: false) { try $0.reorderCalendarRules(ids: reordered.map(\.id)) }
+    }
+
+    /// Projekt der ersten passenden Kalender-Regel; ohne Treffer oder bei Fehlern `nil`.
+    func matchCalendarRule(calendarName: String?, title: String?, attendeeDomains: [String]) -> Project? {
+        read { try $0.matchCalendarRule(calendarName: calendarName, title: title, attendeeDomains: attendeeDomains) } ?? nil
+    }
+
+    // MARK: Aktivität (v5)
+
+    @discardableResult
+    func addActivityRule(kind: ActivityRuleKind, pattern: String, projectId: UUID) -> Bool {
+        write(reloadWidgets: false) { try $0.addActivityRule(kind: kind, pattern: pattern, projectId: projectId) }
+    }
+
+    @discardableResult
+    func saveActivityRule(_ rule: ActivityRule) -> Bool {
+        write(reloadWidgets: false) { try $0.saveActivityRule(rule) }
+    }
+
+    @discardableResult
+    func deleteActivityRule(_ rule: ActivityRule) -> Bool {
+        write(reloadWidgets: false) { try $0.deleteActivityRule(id: rule.id) }
+    }
+
+    /// Verschiebt Aktivitäts-Regeln (Signatur passend zu `onMove`).
+    func reorderActivityRules(fromOffsets source: IndexSet, toOffset destination: Int) {
+        var reordered = activityRules
+        reordered.move(fromOffsets: source, toOffset: destination)
+        activityRules = reordered
+        write(reloadWidgets: false) { try $0.reorderActivityRules(ids: reordered.map(\.id)) }
+    }
+
+    /// Projekt der ersten passenden Aktivitäts-Regel; ohne Treffer oder bei Fehlern `nil`.
+    func matchActivityRule(bundleID: String?, windowTitle: String?, repoPath: String?) -> Project? {
+        read { try $0.matchActivityRule(bundleID: bundleID, windowTitle: windowTitle, repoPath: repoPath) } ?? nil
+    }
+
+    /// Speichert beobachtete Aktivität (Projekt per Regel ermittelt, ältere als 30 Tage fallen weg).
+    /// Bewusst ohne `refresh()`, Benachrichtigung und Widget-Reload: Proben kommen häufig und
+    /// ändern nichts Angezeigtes. Gibt die gespeicherte Probe zurück, bei Fehlern `nil`.
+    @discardableResult
+    func addActivitySample(_ sample: ActivitySample) -> ActivitySample? {
+        guard let database else { return nil }
+        do {
+            return try database.addActivitySample(sample)
+        } catch {
+            lastError = Self.message(for: error)
+            return nil
+        }
+    }
+
+    /// Beobachtete Aktivität im Intervall; bei Fehlern leer.
+    func activitySamples(in interval: DateInterval) -> [ActivitySample] {
+        read { try $0.activitySamples(in: interval) } ?? []
+    }
+
+    /// Löscht Aktivität, die vor `date` endet (still wie `addActivitySample`).
+    @discardableResult
+    func pruneActivitySamples(olderThan date: Date) -> Int {
+        guard let database else { return 0 }
+        do {
+            return try database.pruneActivitySamples(olderThan: date)
+        } catch {
+            lastError = Self.message(for: error)
+            return 0
+        }
+    }
+
     // MARK: Hilfen
 
     /// Wochenziel aus den Einstellungen in Sekunden (`AppSettings.weeklyGoalHours`, gespiegelt
@@ -444,10 +583,22 @@ final class TaktStore {
         SharedSettings.weeklyGoal(in: SharedSettings.defaults)
     }
 
+    /// Führt eine Leseabfrage aus; Fehler landen in `lastError` und ergeben `nil`.
+    private func read<T>(_ operation: (AppDatabase) throws -> T) -> T? {
+        guard let database else { return nil }
+        do {
+            return try operation(database)
+        } catch {
+            lastError = Self.message(for: error)
+            return nil
+        }
+    }
+
     /// Führt eine Schreiboperation aus; Fehler landen in `lastError`, nie ein Absturz.
-    /// Danach: neu laden, andere Prozesse benachrichtigen, Widget-Timelines neu laden.
+    /// Danach: neu laden, andere Prozesse benachrichtigen und – sofern `reloadWidgets` – die
+    /// Widget-Timelines neu laden (Regeln und Kalender-Verknüpfungen zeigt das Widget nicht).
     @discardableResult
-    private func write(_ operation: (AppDatabase) throws -> Void) -> Bool {
+    private func write(reloadWidgets: Bool = true, _ operation: (AppDatabase) throws -> Void) -> Bool {
         guard let database else {
             lastError = "Die Datenbank ist nicht verfügbar."
             return false
@@ -461,7 +612,7 @@ final class TaktStore {
         }
         refresh()
         ChangeNotifier.post()
-        WidgetCenter.shared.reloadAllTimelines()
+        if reloadWidgets { WidgetCenter.shared.reloadAllTimelines() }
         return true
     }
 

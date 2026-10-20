@@ -576,3 +576,115 @@ Bausteine im Store: `stop(at:nextStep:)` für „Leerlauf abziehen“ (Ende = Be
 - Antworten laufen weiter über das Delegate von `BreakReminder`, das Mitteilungen von
   `ForgottenTimerGuard`, `IdleDetector` und `PomodoroController` an diese weiterreicht.
 - Log-Kategorie `focus`.
+
+## v5 – Datenbasis: Pomodoro-Widget, Jahr, Budget-Warnungen, Kalender, Aktivität
+
+Datenbasis in `TaktCore` und Anbindung im Store für sechs Folgefunktionen: Pomodoro im Widget,
+Jahresberichte, Budget-Warnungen, Schnelleingabe überall, Kalender-Anbindung (EventKit) und
+Aktivitäts-Erkennung. Oberflächen folgen; in den Einstellungen stehen „Kalender“ und „Aktivität“
+vorerst als Platzhalter (Reihenfolge Allgemein · Musik · Fokus · Widget · Abrechnung · Kalender ·
+Aktivität, Fenster 560 pt breit).
+
+### Datenmodell (Migration `v5`)
+
+| Feld/Tabelle | Typ | Bedeutung |
+|---|---|---|
+| `TimeEntry.updatedAt` | `Date`, REAL, NOT NULL | letzte Änderung; Altbestände = `startedAt`. Gesetzt von `addEntry`, `updateEntry`, `startTimer` (neuer Eintrag, Tag am laufenden, beendeter vorheriger) und `stopTimer` – jeweils mit optionalem `now:` |
+| `calendarEventLink` | Tabelle | `entryId` (PK, FK → `timeEntry`, `ON DELETE CASCADE`), `eventIdentifier`, `calendarIdentifier`, `updatedAt` (letzte Spiegelung) |
+| `calendarRule` | Tabelle | `id`, `kind` (`calendarName`/`titleContains`/`attendeeDomain`), `pattern`, `projectId` (FK, CASCADE), `sortOrder`, `createdAt` |
+| `activityRule` | Tabelle | `id`, `kind` (`bundleID`/`windowTitleContains`/`repoPath`), `pattern`, `projectId` (FK, CASCADE), `sortOrder`, `createdAt` |
+| `activitySample` | Tabelle | `id`, `startedAt`, `endedAt`, `bundleID`, `windowTitle?`, `repoPath?`, `projectId?` (FK, `ON DELETE SET NULL`) |
+
+Migration löscht nichts; geprüft mit Test (v4-Datenbank mit Daten) und an der echten Datenbank
+(Sicherung `takt.sqlite.bak-v4` per `sqlite3 .backup`).
+
+### Pomodoro im Widget (`SharedSettings`)
+
+- `PomodoroState` (`enabled`, `phase` – `work`/`shortBreak`/`longBreak`/`idle`, unbekannt → `idle` –,
+  `phaseEndsAt?`, `cycle`, `cyclesBeforeLongBreak`, `updatedAt`) als JSON unter `pomodoroState` in der
+  App-Group-Suite: `SharedSettings.pomodoro` (get/set), `pomodoro(in:)`, `setPomodoro(_:in:)`
+  (`nil` entfernt), `clearPomodoro(in:)`. Hilfen: `remaining(at:)`, `isActive(at:)`, `Phase.isBreak`/`title`.
+- Schreiben ist Sache des `PomodoroController` (bei jedem Phasenwechsel); `AppSettings` löscht den
+  Zustand, wenn der Modus aus ist (auch beim Start).
+- `WidgetSnapshot.pomodoro` nur bei `enabled`; `placeholder` zeigt Einheit 2/4, Arbeit, noch 23 min.
+
+### Jahresbericht (`Reports.swift`)
+
+`yearReport(year:rounding:defaultHourlyRate:now:calendar:) -> YearReport` – eine Leseabfrage für Jahr
+und Vorjahr, gerechnet mit derselben Logik wie `report(for:)`:
+- `months`: genau 12 `MonthBucket` (1. des Monats, `total`, `billable`, `roundedBillable`, `business`,
+  `personal`, `amount`, `activeDays`), auch leere Monate.
+- `byProject` = Zeilen des ganzen Jahres; `byClient: [ClientRow]` (`client` getrimmt, gleiche Namen in
+  anderer Schreibweise zusammengefasst – die Schreibweise des größten Projekts gewinnt; `nil` = ohne
+  Kunde), sortiert nach Betrag, dann Dauer.
+- `tagShares`: die 8 größten Tags, danach „Sonstige“ (`isOther`) und „ohne Tag“ (`tag == nil`); Anteile
+  an `total`, zusammen 1. `TagShare.title` liefert den Anzeigenamen.
+- Summen (`total`, `billable`, `amount`, `business`, `personal`, `activeDays`, `averagePerActiveDay`)
+  aus dem Jahreszeitraum; `previousYearTotal`/`previousYearAmount` mit gleicher Rundung.
+- Rundung je Eintrag nach dem Zuschneiden: Ein Eintrag über eine Monatsgrenze wird in den Monaten je
+  Teil gerundet – die Summe der Monatsbeträge kann um Cent von `amount` abweichen.
+
+### Budget-Warnungen
+
+`budgetUsages(now:) -> [BudgetUsage]` (`project`, `used`, `budget`, `fraction`, `remaining`): alle
+aktiven Projekte mit Budget > 0 in Projektreihenfolge, eine Abfrage, laufender Eintrag bis `now`.
+Schalter `AppSettings.budgetWarningsEnabled` (Standard an); Schwellen (80 %/100 %) legt die Oberfläche fest.
+
+### Kalender
+
+- Verknüpfungen: `calendarLink(entryId:)`, `calendarLinks()`, `setCalendarLink(_:)` (ersetzt; unbekannter
+  Eintrag → `entryNotFound`), `removeCalendarLink(entryId:)`.
+- `entriesNeedingMirror(since:minimumDuration:)`: abgeschlossene Einträge mit Ende ≥ `since` und Dauer
+  ≥ Mindestdauer, ohne Verknüpfung **oder** mit `link.updatedAt < entry.updatedAt`; nach Beginn.
+  Nach dem Spiegeln setzt die App die Verknüpfung mit `updatedAt = jetzt`.
+- `removeOrphanLinks()` entfernt Verknüpfungen ohne Eintrag (Altlasten) oder zu laufenden Einträgen und
+  gibt sie zurück. **Achtung:** Beim Löschen eines Eintrags verschwindet die Verknüpfung per CASCADE –
+  die App muss das Kalenderereignis vorher über `calendarLink(entryId:)` ermitteln und löschen.
+- Regeln: `calendarRules()` (unbekannte Arten werden übersprungen), `addCalendarRule(kind:pattern:projectId:now:)`
+  (hängt hinten an, Muster getrimmt, leer → `TaktError.emptyPattern`), `saveCalendarRule`,
+  `deleteCalendarRule(id:)`, `reorderCalendarRules(ids:)`.
+- `matchCalendarRule(calendarName:title:attendeeDomains:)`: erste passende Regel nach `sortOrder`, deren
+  Projekt nicht archiviert ist. Vergleiche ohne Groß-/Kleinschreibung und Akzente: Kalendername
+  gleich, Titel enthält, Domain gleich oder Subdomain (`anna@mail.acme.de` passt zu `@acme.de`, nicht
+  `notacme.de`); Teilnehmer dürfen als Adresse oder Domain kommen.
+
+### Aktivität
+
+- Regeln wie beim Kalender: `activityRules()`, `addActivityRule`, `saveActivityRule`, `deleteActivityRule`,
+  `reorderActivityRules`, `matchActivityRule(bundleID:windowTitle:repoPath:)` – Bundle-ID gleich, Titel
+  enthält, Repository gleich oder darunter (`/dev/takt` passt zu `/dev/takt/TaktCore`, nicht zu
+  `/dev/takt2`). Pfade normalisiert (`ActivityRule.normalizedPath`: `~` und `file://` aufgelöst, `.`/`..`
+  und `/` am Ende entfernt, klein geschrieben, ohne Symlink-Auflösung).
+- Proben: `addActivitySample(_:resolveProject: = true)` trimmt Texte, ermittelt das Projekt per Regel
+  (ein unbekanntes Projekt wird `nil`) und löscht in derselben Transaktion Proben, die mehr als 30 Tage
+  vor ihr enden (`activitySampleRetention`); `activitySamples(in:)`, `pruneActivitySamples(olderThan:)`.
+
+### Einstellungen (`AppSettings`)
+
+| Schlüssel | Standard | Bereich | Bedeutung |
+|---|---|---|---|
+| `calendarShowEvents` | aus | | Termine in „Heute“ (an erst nach Berechtigung) |
+| `calendarVisibleIDs` | `[]` | | angezeigte Kalender, leer = alle |
+| `calendarMirrorEnabled` | aus | | Einträge in einen Kalender spiegeln |
+| `calendarMirrorCalendarID` | `nil` | | Zielkalender |
+| `calendarMirrorMinimumMinutes` | 5 | 1–240 | kürzere Einträge nicht spiegeln |
+| `activitySuggestionsEnabled` | aus | | Projektvorschläge aus Aktivität |
+| `activityMismatchMinutes` | 10 | 1–120 | so lange muss die Aktivität abweichen |
+| `activityAutoStartEnabled` | aus | | ohne Timer automatisch starten |
+| `budgetWarningsEnabled` | an | | Budget-Warnungen |
+| `quickEntryHotKeyEnabled` | an | | globaler Kurzbefehl Schnelleingabe |
+| `quickEntryHotKeyKeyCode` | 45 (N) | 0–127 | Taste |
+| `quickEntryHotKeyModifiers` | ⌃⌥⌘ | | Modifikatoren (0 → Standard) |
+| `quickEntryInMenuBar` | an | | Schnelleingabe im Menüleisten-Popover |
+
+### Store (`TaktStore`)
+
+- Neu gelesen in `refresh()`: `calendarRules`, `activityRules`.
+- Lesen: `yearReport(year:rounding:defaultHourlyRate:now:)`, `budgetUsages(now:)`, `calendarLink(entryId:)`,
+  `entriesNeedingMirror(since:minimumDuration:)`, `matchCalendarRule(…)`, `matchActivityRule(…)`,
+  `activitySamples(in:)`.
+- Schreiben mit `refresh()` und Darwin-Notification, aber ohne Widget-Reload: Kalender-Verknüpfungen
+  (`setCalendarLink`, `removeCalendarLink`, `removeOrphanCalendarLinks`) und Regeln (`add…Rule`,
+  `save…Rule`, `delete…Rule`, `reorder…Rules(fromOffsets:toOffset:)`).
+- Proben (`addActivitySample`, `pruneActivitySamples`) ganz still: kein `refresh()`, keine
+  Benachrichtigung, kein Widget-Reload.
