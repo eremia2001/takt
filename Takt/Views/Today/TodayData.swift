@@ -1,0 +1,200 @@
+import Foundation
+import SwiftUI
+#if canImport(TaktCore)
+import TaktCore
+#endif
+
+// Daten und Formate der Ansicht „Heute“. Ohne Store-Abhängigkeit: `TodayView` befüllt
+// `TodayData` aus dem `TaktStore`, Vorschauen und das Render-Harness aus Beispieldaten.
+// (Ohne TaktCore – z. B. im Harness – wird `DurationFormat` direkt mitkompiliert.)
+
+struct TodayData {
+    struct ProjectItem: Identifiable, Hashable {
+        let id: UUID
+        let name: String
+        let colorHex: String
+        let isBusiness: Bool
+
+        var color: Color { Color(hex: colorHex) }
+        /// Projektfarbe als Grund für weiße Schrift.
+        var colorBehindWhite: Color { DesignColor.behindWhite(colorHex) }
+        var kind: String { isBusiness ? "Business" : "Privat" }
+    }
+
+    struct EntryItem: Identifiable, Hashable {
+        let id: UUID
+        let project: ProjectItem
+        let start: Date
+        /// `nil` = läuft.
+        let end: Date?
+        let nextStep: String?
+
+        var isRunning: Bool { end == nil }
+
+        func duration(now: Date) -> TimeInterval {
+            max(0, (end ?? now).timeIntervalSince(start))
+        }
+    }
+
+    /// Projekt, mit dem es nach einer Pause weitergeht, samt dessen letztem „Nächsten Schritt“.
+    struct Resume: Hashable {
+        let project: ProjectItem
+        let nextStep: String?
+    }
+
+    var now: Date
+    /// Beginn des heutigen Tages (für Tagesleiste und Zuschnitt).
+    var dayStart: Date
+    /// Aktive Projekte in Sortierreihenfolge.
+    var projects: [ProjectItem]
+    /// Heutige Einträge, chronologisch aufsteigend (ein laufender Eintrag steht zuletzt).
+    var entries: [EntryItem]
+    /// Tagessumme inklusive laufendem Eintrag, auf heute zugeschnitten.
+    var todayTotal: TimeInterval
+    var switches: Int
+    var longestBlock: TimeInterval
+    /// Nur bei Pause: „Weiter mit …“.
+    var resume: Resume?
+    /// Nur wenn etwas läuft: „Nächster Schritt“ aus dem vorigen Lauf dieses Projekts.
+    var runningNextStep: String?
+
+    var running: EntryItem? { entries.last(where: \.isRunning) }
+    var lastCompleted: EntryItem? { entries.last(where: { !$0.isRunning }) }
+
+    /// Pause seit dem letzten heutigen Stopp (nur wenn nichts läuft).
+    var pauseSinceLastStop: (since: Date, duration: TimeInterval)? {
+        guard running == nil, let end = lastCompleted?.end else { return nil }
+        return (end, max(0, now.timeIntervalSince(end)))
+    }
+
+    // MARK: Tagesleiste
+
+    /// Standardfenster der Tagesleiste in vollen Stunden.
+    static let defaultWindow = 8...19
+
+    /// Sichtbares Zeitfenster in vollen Stunden: 8–19 Uhr, erweitert um Einträge außerhalb.
+    var dayWindow: ClosedRange<Int> {
+        var lower = Self.defaultWindow.lowerBound
+        var upper = Self.defaultWindow.upperBound
+        for entry in entries {
+            lower = min(lower, Int(hourOfDay(entry.start).rounded(.down)))
+            upper = max(upper, Int(hourOfDay(entry.end ?? now).rounded(.up)))
+        }
+        lower = max(0, lower)
+        upper = min(24, max(upper, lower + 1))
+        return lower...upper
+    }
+
+    /// Stunde (0…24, gebrochen) eines Zeitpunkts im heutigen Tag; außerhalb wird begrenzt.
+    func hourOfDay(_ date: Date) -> Double {
+        if date <= dayStart { return 0 }
+        let calendar = Calendar.current
+        guard let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart), date < dayEnd else { return 24 }
+        let parts = calendar.dateComponents([.hour, .minute, .second], from: date)
+        return Double(parts.hour ?? 0) + Double(parts.minute ?? 0) / 60 + Double(parts.second ?? 0) / 3600
+    }
+}
+
+/// Aktionen der Ansicht; `TodayView` verdrahtet sie mit dem Store.
+struct TodayActions {
+    var start: (TodayData.ProjectItem) -> Void = { _ in }
+    /// Stoppt mit optionalem „Nächsten Schritt“.
+    var stop: (String) -> Void = { _ in }
+    var openEntry: (TodayData.EntryItem) -> Void = { _ in }
+    var deleteEntry: (TodayData.EntryItem) -> Void = { _ in }
+    var addEntry: () -> Void = {}
+    var showProjects: () -> Void = {}
+}
+
+// MARK: - Formate
+
+enum TodayFormat {
+    /// `h:mm`, abgerundet.
+    static func duration(_ interval: TimeInterval) -> String {
+        DurationFormat.hourMinute(interval)
+    }
+
+    static func clock(_ date: Date) -> String {
+        ClockFormat.time(date)
+    }
+
+    static func range(_ entry: TodayData.EntryItem) -> String {
+        "\(clock(entry.start)) – \(entry.end.map(clock) ?? "jetzt")"
+    }
+
+    private static let dayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "de_DE")
+        formatter.dateFormat = "EEEE, d. MMMM"
+        return formatter
+    }()
+
+    /// „Dienstag, 20. Oktober“.
+    static func day(_ date: Date) -> String {
+        dayFormatter.string(from: date)
+    }
+}
+
+// MARK: - Beispieldaten (Vorschauen, Render-Harness)
+
+#if DEBUG
+extension TodayData {
+    static let samplePortal = ProjectItem(id: UUID(), name: "Kundenportal", colorHex: "#3A7BD5", isBusiness: true)
+    static let sampleWebsite = ProjectItem(id: UUID(), name: "Website", colorHex: "#30B0C7", isBusiness: true)
+    static let sampleGarden = ProjectItem(id: UUID(), name: "Garten", colorHex: "#34C759", isBusiness: false)
+    static let sampleTax = ProjectItem(id: UUID(), name: "Steuer", colorHex: "#FF9500", isBusiness: false)
+
+    private static func sampleTime(_ hour: Int, _ minute: Int) -> Date {
+        Calendar.current.date(from: DateComponents(year: 2026, month: 10, day: 20, hour: hour, minute: minute))!
+    }
+
+    private static var sampleMorning: [EntryItem] {
+        [
+            EntryItem(id: UUID(), project: sampleWebsite, start: sampleTime(9, 5), end: sampleTime(10, 40),
+                      nextStep: "Deploy-Skript fertig machen"),
+            EntryItem(id: UUID(), project: samplePortal, start: sampleTime(10, 50), end: sampleTime(12, 20), nextStep: nil),
+            EntryItem(id: UUID(), project: sampleTax, start: sampleTime(13, 0), end: sampleTime(13, 35), nextStep: nil),
+        ]
+    }
+
+    private static func sample(now: Date, entries: [EntryItem], resume: Resume?) -> TodayData {
+        let total = entries.reduce(0) { $0 + $1.duration(now: now) }
+        let switches = zip(entries, entries.dropFirst()).filter { $0.project.id != $1.project.id }.count
+        return TodayData(
+            now: now,
+            dayStart: Calendar.current.startOfDay(for: now),
+            projects: [samplePortal, sampleWebsite, sampleGarden, sampleTax],
+            entries: entries,
+            todayTotal: total,
+            switches: switches,
+            longestBlock: entries.map { $0.duration(now: now) }.max() ?? 0,
+            resume: resume,
+            runningNextStep: nil
+        )
+    }
+
+    /// Läuft: Kundenportal seit 14:32, jetzt 15:56 → 1:24; Tag 5:04.
+    static var sampleRunning: TodayData {
+        sample(
+            now: sampleTime(15, 56),
+            entries: sampleMorning + [
+                EntryItem(id: UUID(), project: samplePortal, start: sampleTime(14, 32), end: nil, nextStep: nil),
+            ],
+            resume: nil
+        )
+    }
+
+    /// Pause: Kundenportal um 15:56 gestoppt (mit Notiz), jetzt 16:10.
+    static var sampleIdle: TodayData {
+        let step = "Login-Fehler im Staging nachstellen"
+        return sample(
+            now: sampleTime(16, 10),
+            entries: sampleMorning + [
+                EntryItem(id: UUID(), project: samplePortal, start: sampleTime(14, 32), end: sampleTime(15, 56),
+                          nextStep: step),
+            ],
+            resume: Resume(project: samplePortal, nextStep: step)
+        )
+    }
+}
+#endif

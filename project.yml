@@ -1,0 +1,92 @@
+name: Takt
+options:
+  bundleIdPrefix: dev.eremiya
+  deploymentTarget:
+    macOS: "15.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MACOSX_DEPLOYMENT_TARGET: "15.0"
+    # Automatische Signierung mit dem Personal Team (nötig für App Group + Widget).
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: N5GJ4D394X
+    ENABLE_HARDENED_RUNTIME: NO
+    SWIFT_STRICT_CONCURRENCY: minimal
+    CURRENT_PROJECT_VERSION: 1
+    MARKETING_VERSION: 0.1.0
+
+packages:
+  TaktCore:
+    path: TaktCore
+
+targets:
+  Takt:
+    type: application
+    platform: macOS
+    sources:
+      - Takt
+    dependencies:
+      - package: TaktCore
+      - target: TaktWidget
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.eremiya.takt
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    info:
+      path: Takt/Info.plist
+      properties:
+        CFBundleDisplayName: Takt
+        CFBundleName: Takt
+        LSApplicationCategoryType: public.app-category.productivity
+        NSAppleEventsUsageDescription: Takt steuert Spotify, um beim Start eines Timers Musik abzuspielen.
+        NSHumanReadableCopyright: ""
+        CFBundleURLTypes:
+          - CFBundleURLName: dev.eremiya.takt
+            CFBundleURLSchemes: [takt]
+    entitlements:
+      path: Takt/Takt.entitlements
+      properties:
+        # macOS-Schreibweise mit Team-Präfix: braucht keine Freischaltung im Developer-Portal.
+        com.apple.security.application-groups:
+          - N5GJ4D394X.group.dev.eremiya.takt
+        com.apple.security.automation.apple-events: true
+
+  TaktWidget:
+    type: app-extension
+    platform: macOS
+    sources:
+      - TaktWidget
+    dependencies:
+      - package: TaktCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.eremiya.takt.widget
+        SKIP_INSTALL: YES
+    info:
+      path: TaktWidget/Info.plist
+      properties:
+        CFBundleDisplayName: Takt
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    entitlements:
+      path: TaktWidget/TaktWidget.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.application-groups:
+          - N5GJ4D394X.group.dev.eremiya.takt
+
+schemes:
+  Takt:
+    build:
+      targets:
+        Takt: all
+        TaktWidget: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets: []
