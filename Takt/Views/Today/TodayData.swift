@@ -44,6 +44,32 @@ struct TodayData {
         let nextStep: String?
     }
 
+    /// Kalendertermin für Tagesleiste und Terminliste (ohne EventKit, siehe `CalendarService`).
+    struct EventItem: Identifiable, Hashable {
+        let id: String
+        let title: String
+        let start: Date
+        let end: Date
+        let calendarTitle: String
+        let calendarColor: Color
+        var isAllDay = false
+        /// Projekt der ersten passenden Kalender-Regel, sonst `nil`.
+        var project: ProjectItem? = nil
+        /// Schon als Eintrag erfasst (Eintrag mit gleichem Zeitraum ±1 min).
+        var isCaptured = false
+
+        /// Läuft der Termin gerade?
+        func isCurrent(now: Date) -> Bool { start <= now && now < end }
+    }
+
+    /// Hinweis: Ein Termin läuft, der Timer aber auf einem anderen Projekt.
+    struct MeetingHint: Hashable {
+        let event: EventItem
+        let runningProject: ProjectItem
+        /// Projekt aus der Regel – nur dann gibt es „Wechseln zu …“.
+        var target: ProjectItem? { event.project }
+    }
+
     /// Geplanter „nächster Block“.
     struct PlannedItem: Hashable {
         let project: ProjectItem
@@ -73,6 +99,23 @@ struct TodayData {
     var plannedBlock: PlannedItem? = nil
     /// Heute als frei markiert: Art („Urlaub“), sonst `nil`.
     var todayOff: String? = nil
+    /// Heutige Termine mit Uhrzeit (Tagesleiste, Liste „Termine heute“), nach Beginn sortiert.
+    /// Leer, wenn „Termine in Heute anzeigen“ aus ist oder der Kalenderzugriff fehlt.
+    var events: [EventItem] = []
+    /// Ganztägige Termine heute – nur als Hinweis, nicht in der Tagesleiste.
+    var allDayEvents: [EventItem] = []
+
+    /// Termin, der gerade läuft, während der Timer auf einem anderen Projekt steht: anderes
+    /// Regel-Projekt, oder der Termin hat keine Regel (dann ohne „Wechseln“).
+    var meetingHint: MeetingHint? {
+        guard let running else { return nil }
+        let current = events.filter { $0.isCurrent(now: now) && !$0.isCaptured }
+        // Ohne Regel nur, wenn der laufende Eintrag nicht ohnehin als Meeting markiert ist.
+        let tracksMeeting = running.tag?.compare("Meeting", options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+        guard let event = current.first(where: { $0.project != nil && $0.project?.id != running.project.id })
+            ?? (tracksMeeting ? nil : current.first(where: { $0.project == nil })) else { return nil }
+        return MeetingHint(event: event, runningProject: running.project)
+    }
 
     var running: EntryItem? { entries.last(where: \.isRunning) }
     var lastCompleted: EntryItem? { entries.last(where: { !$0.isRunning }) }
@@ -95,6 +138,10 @@ struct TodayData {
         for entry in entries {
             lower = min(lower, Int(hourOfDay(entry.start).rounded(.down)))
             upper = max(upper, Int(hourOfDay(entry.end ?? now).rounded(.up)))
+        }
+        for event in events {
+            lower = min(lower, Int(hourOfDay(event.start).rounded(.down)))
+            upper = max(upper, Int(hourOfDay(event.end).rounded(.up)))
         }
         lower = max(0, lower)
         upper = min(24, max(upper, lower + 1))
@@ -157,6 +204,8 @@ struct TodayActions {
     var clearPlannedBlock: () -> Void = {}
     /// Plant den nächsten Block: Projekt, Beginn, Notiz (leer = keine).
     var planBlock: (UUID, Date, String) -> Void = { _, _, _ in }
+    /// Termin als Eintrag übernehmen (öffnet den Editor vorbelegt).
+    var captureEvent: (TodayData.EventItem) -> Void = { _ in }
 }
 
 /// Fehler beim Übernehmen einer Schnelleingabe (Text für die Vorschauzeile).
@@ -265,6 +314,41 @@ extension TodayData {
             ],
             resume: Resume(project: samplePortal, nextStep: step)
         ).withPlannedBlock(PlannedItem(project: sampleWebsite, startAt: sampleTime(16, 30), note: "Deploy vorbereiten"))
+    }
+
+    /// Läuft (Website seit 14:32, jetzt 15:56) mit Terminen: „Review Gerlach“ läuft gerade und
+    /// gehört per Regel zum Kundenportal; „Standup“ ist schon erfasst; ein ganztägiger Feiertag.
+    static var sampleWithEvents: TodayData {
+        let blue = Color(hex: "#3A7BD5")
+        let purple = Color(hex: "#AF52DE")
+        let standupStart = sampleTime(9, 30)
+        var data = sample(
+            now: sampleTime(15, 56),
+            entries: [
+                EntryItem(id: UUID(), project: samplePortal, start: standupStart, end: sampleTime(9, 45),
+                          nextStep: "Standup", tag: "Meeting"),
+                EntryItem(id: UUID(), project: sampleWebsite, start: sampleTime(9, 50), end: sampleTime(12, 10),
+                          nextStep: "Deploy-Skript fertig machen", tag: "Bugfix"),
+                EntryItem(id: UUID(), project: sampleTax, start: sampleTime(13, 0), end: sampleTime(13, 35), nextStep: nil),
+                EntryItem(id: UUID(), project: sampleWebsite, start: sampleTime(14, 32), end: nil, nextStep: nil),
+            ],
+            resume: nil
+        )
+        data.events = [
+            EventItem(id: "standup", title: "Standup", start: standupStart, end: sampleTime(9, 45),
+                      calendarTitle: "Arbeit", calendarColor: blue, project: samplePortal, isCaptured: true),
+            EventItem(id: "lunch", title: "Mittag mit Jana", start: sampleTime(12, 15), end: sampleTime(13, 0),
+                      calendarTitle: "Privat", calendarColor: purple),
+            EventItem(id: "review", title: "Review Gerlach", start: sampleTime(15, 30), end: sampleTime(16, 30),
+                      calendarTitle: "Arbeit", calendarColor: blue, project: samplePortal),
+            EventItem(id: "call", title: "Telefonat Steuerberater", start: sampleTime(17, 0), end: sampleTime(17, 30),
+                      calendarTitle: "Privat", calendarColor: purple, project: sampleTax),
+        ]
+        data.allDayEvents = [
+            EventItem(id: "holiday", title: "Tag der offenen Tür", start: sampleTime(0, 0), end: sampleTime(23, 59),
+                      calendarTitle: "Arbeit", calendarColor: blue, isAllDay: true),
+        ]
+        return data
     }
 
     private func withPlannedBlock(_ block: PlannedItem) -> TodayData {

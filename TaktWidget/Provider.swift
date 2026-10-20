@@ -55,6 +55,19 @@ struct TaktEntry: TimelineEntry {
         return min(1, runningDuration / (Double(minutes) * 60))
     }
 
+    /// Laufende Pomodoro-Phase zu `date`: Modus an, Phase nicht `.idle`, Ende noch nicht erreicht.
+    /// `nil` sonst – dann gilt wieder der Pausenstrich bzw. nichts.
+    var pomodoro: PomodoroDisplay? {
+        guard let state = snapshot.pomodoro, state.enabled, state.isActive(at: date) else { return nil }
+        return PomodoroDisplay(state: state, date: date)
+    }
+
+    /// Pomodoro-Pause ohne laufenden Timer (Pause-Zustand: „Pause · noch 7 min“).
+    var pomodoroBreak: PomodoroDisplay? {
+        guard let pomodoro, pomodoro.isBreak else { return nil }
+        return pomodoro
+    }
+
     /// Budget mit live hochgerechnetem Verbrauch.
     /// Läuft ein Timer, ist es das Budget des laufenden Projekts, im Ein-Projekt-Widget das des
     /// festen Projekts (auch ohne laufenden Timer).
@@ -119,6 +132,59 @@ struct BudgetDisplay: Hashable {
     }
 }
 
+/// Pomodoro-Phase für die Anzeige, bezogen auf einen Zeitpunkt.
+///
+/// Beginn der Phase ist `PomodoroState.updatedAt` – der `PomodoroController` schreibt dort den
+/// Phasenbeginn hinein (siehe docs/spec-widget-pomodoro-budget.md); daraus und aus `phaseEndsAt`
+/// ergibt sich der verstrichene Anteil.
+struct PomodoroDisplay: Hashable {
+    let phase: PomodoroState.Phase
+    let cycle: Int
+    let cycles: Int
+    /// Restzeit, nie negativ.
+    let remaining: TimeInterval
+    /// Verstrichener Anteil der Phase (0 … 1).
+    let fraction: Double
+
+    init(state: PomodoroState, date: Date) {
+        phase = state.phase
+        cycles = max(1, state.cyclesBeforeLongBreak)
+        cycle = min(max(1, state.cycle), cycles)
+        remaining = state.remaining(at: date) ?? 0
+        if let end = state.phaseEndsAt, end > state.updatedAt {
+            let length = end.timeIntervalSince(state.updatedAt)
+            fraction = min(1, max(0, date.timeIntervalSince(state.updatedAt) / length))
+        } else {
+            fraction = 0
+        }
+    }
+
+    var isBreak: Bool { phase.isBreak }
+
+    /// Restzeit in angefangenen Minuten (wie Menüleiste und Popover: „noch 1 min“ bis zum Ende).
+    var remainingMinutes: Int { max(0, Int((remaining / 60).rounded(.up))) }
+
+    /// Beschriftung des Pomodoro-Strichs: „🍅 23 min“ bzw. „Pause 7 min“.
+    var label: String {
+        isBreak ? "Pause \(remainingMinutes) min" : "🍅 \(remainingMinutes) min"
+    }
+
+    /// Restzeit als Uhr ohne Sekunden-Takt: „7:00“, ab einer Stunde „1:05:00“.
+    var clock: String {
+        let minutes = remainingMinutes
+        if minutes >= 60 { return String(format: "%d:%02d:00", minutes / 60, minutes % 60) }
+        return "\(minutes):00"
+    }
+
+    /// „Pomodoro 2/4“.
+    var cycleLabel: String { "Pomodoro \(cycle)/\(cycles)" }
+
+    /// Bedienungshilfe: „Pomodoro 2 von 4, Arbeit, noch 23 Minuten“.
+    var accessibilityText: String {
+        "Pomodoro \(cycle) von \(cycles), \(phase.title), noch \(remainingMinutes) Minuten"
+    }
+}
+
 struct Provider: AppIntentTimelineProvider {
     typealias Intent = TaktWidgetConfigurationIntent
 
@@ -166,6 +232,10 @@ struct Provider: AppIntentTimelineProvider {
     /// für die nächsten 60 Minuten, dann neu laden. Läuft nichts: ein Eintrag, neu laden nach
     /// einer Stunde bzw. um Mitternacht (Tagessumme beginnt bei 0); wird vorher ein geplanter
     /// Block fällig, kommt zu seinem Beginn ein zweiter Eintrag (Hervorhebung „Jetzt: …“).
+    ///
+    /// Läuft eine Pomodoro-Phase, kommen die Grenzen der Restminuten dazu (damit „23 min“ genau
+    /// umspringt) und ein Eintrag zum Phasenende; dort endet die Timeline (`.atEnd`) – die App
+    /// schreibt dann die nächste Phase und lädt ohnehin neu.
     /// Alle Einträge tragen denselben `style`; ein Wechsel in der App lädt die Timeline ohnehin neu.
     static func timeline(
         for snapshot: WidgetSnapshot,
@@ -173,17 +243,38 @@ struct Provider: AppIntentTimelineProvider {
         style: WidgetStyle = .plain,
         calendar: Calendar = .current
     ) -> Timeline<TaktEntry> {
-        let first = TaktEntry(date: now, snapshot: snapshot, snapshotDate: now, style: style)
+        let phaseEnd = pomodoroPhaseEnd(snapshot, now: now)
+
+        func timeline(_ dates: [Date], horizon: Date, policy: TimelineReloadPolicy) -> Timeline<TaktEntry> {
+            var dates = dates
+            if let phaseEnd {
+                dates += pomodoroMinuteBoundaries(phaseEnd: phaseEnd, now: now)
+                if phaseEnd <= horizon { dates.append(phaseEnd) }
+            }
+            let cutoff = phaseEnd.map { min($0, horizon) } ?? horizon
+            let sorted = dates.filter { $0 > now && $0 <= cutoff }.sorted()
+            // Zeitpunkte, die weniger als eine Sekunde auseinanderliegen, zusammenfassen.
+            var unique: [Date] = []
+            for date in sorted where unique.last.map({ date.timeIntervalSince($0) >= 1 }) ?? true {
+                unique.append(date)
+            }
+            let entries = [now] + unique
+            let ends = phaseEnd.map { $0 <= horizon } ?? false
+            return Timeline(
+                entries: entries.map { TaktEntry(date: $0, snapshot: snapshot, snapshotDate: now, style: style) },
+                policy: ends ? .atEnd : policy
+            )
+        }
 
         guard let running = snapshot.running else {
             let midnight = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now))
                 ?? now.addingTimeInterval(idleRefresh)
             let refresh = min(now.addingTimeInterval(idleRefresh), midnight)
-            var entries = [first]
+            var dates: [Date] = []
             if let block = snapshot.plannedBlock, block.startAt > now, block.startAt < refresh {
-                entries.append(TaktEntry(date: block.startAt, snapshot: snapshot, snapshotDate: now, style: style))
+                dates.append(block.startAt)
             }
-            return Timeline(entries: entries, policy: .after(refresh))
+            return timeline(dates, horizon: refresh, policy: .after(refresh))
         }
 
         // Minutengrenzen relativ zum Start, damit „h:mm“ genau dann umspringt, wenn eine
@@ -191,14 +282,22 @@ struct Provider: AppIntentTimelineProvider {
         let startedAt = running.entry.startedAt
         let elapsedMinutes = floor(max(0, now.timeIntervalSince(startedAt)) / 60)
         let following = (1...runningHorizon).map { offset in
-            TaktEntry(
-                date: startedAt.addingTimeInterval((elapsedMinutes + Double(offset)) * 60),
-                snapshot: snapshot,
-                snapshotDate: now,
-                style: style
-            )
+            startedAt.addingTimeInterval((elapsedMinutes + Double(offset)) * 60)
         }
-        return Timeline(entries: [first] + following, policy: .atEnd)
+        return timeline(following, horizon: following.last ?? now, policy: .atEnd)
+    }
+
+    /// Ende der laufenden Pomodoro-Phase, falls der Modus an ist und die Phase noch läuft.
+    static func pomodoroPhaseEnd(_ snapshot: WidgetSnapshot, now: Date) -> Date? {
+        guard let state = snapshot.pomodoro, state.enabled, state.isActive(at: now) else { return nil }
+        return state.phaseEndsAt
+    }
+
+    /// Zeitpunkte, zu denen die Restzeit in angefangenen Minuten umspringt (Ende − n Minuten).
+    static func pomodoroMinuteBoundaries(phaseEnd: Date, now: Date) -> [Date] {
+        let minutes = Int(max(0, phaseEnd.timeIntervalSince(now)) / 60)
+        guard minutes > 0 else { return [] }
+        return (1...minutes).map { phaseEnd.addingTimeInterval(-Double($0) * 60) }
     }
 
     // MARK: Galerie-Vorschau

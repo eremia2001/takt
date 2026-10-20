@@ -8,7 +8,10 @@ import WidgetKit
 // Stunde (0…60 Min) und beginnt dann von vorn – das Widget „tickt“ minütlich sichtbar.
 // Hat das Projekt ein Budget, zeigt der Ring stattdessen den Budgetverbrauch (ab 80 % Orange,
 // über 100 % Rot und voll), darunter „12:30 / 40 h“.
-// Pause: gepunkteter, blasser Ring, in der Mitte die Tagessumme.
+// Läuft eine Pomodoro-Phase, zeigt der Ring deren verstrichenen Anteil (Arbeit in Projektfarbe,
+// Pause neutral), darunter „Pomodoro 2/4 · 🍅 23 min“.
+// Pause: gepunkteter, blasser Ring, in der Mitte die Tagessumme; in einer Pomodoro-Pause ein
+// neutraler Ring mit dem Restanteil und „Pause 7:00“.
 // Hintergrund bleibt `.fill.tertiary` (siehe `TaktWidgetView`).
 
 /// Ring mit Spur und Fortschritt. `progress == nil` = Pause (gepunktet, neutral).
@@ -115,7 +118,8 @@ struct RingDial<Center: View>: View {
 
 // MARK: Läuft
 
-/// Klein: Projektname, Ring mit Dauer, Pausenstrich und Stopp-Knopf, ggf. Budget, unten
+/// Klein: Projektname, Ring mit Dauer, Pausenstrich und Stopp-Knopf, ggf. Budget bzw.
+/// „Pomodoro 2/4 · 🍅 23 min“, unten
 /// Wechsel-Punkte und „Heute h:mm“.
 /// Mittel/Karte im großen Widget: Ring links (darunter Budget und im mittleren Widget die
 /// Tagessumme), rechts Projekt, nächster Schritt, „Wechseln zu“ und ggf. der geplante Block.
@@ -135,7 +139,11 @@ struct RingRunningView: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                 dial(durationSize: 26, buttonSize: 22, barWidth: 36)
-                if let budget = entry.budget {
+                // Mit Pomodoro zeigt der Ring die Phase; das Budget steht dann nur im mittleren
+                // und großen Widget (hier fehlt die Höhe für beides).
+                if let pomodoro = entry.pomodoro {
+                    PomodoroCycleLabel(pomodoro: pomodoro)
+                } else if let budget = entry.budget {
                     BudgetLabel(budget: budget)
                 }
                 HStack(spacing: 4) {
@@ -151,6 +159,9 @@ struct RingRunningView: View {
             HStack(spacing: 18) {
                 VStack(spacing: 3) {
                     dial(durationSize: 32, buttonSize: 26, barWidth: 48)
+                    if let pomodoro = entry.pomodoro {
+                        PomodoroCycleLabel(pomodoro: pomodoro)
+                    }
                     if let budget = entry.budget {
                         BudgetLabel(budget: budget)
                     }
@@ -193,11 +204,27 @@ struct RingRunningView: View {
         }
     }
 
-    /// Ring: mit Budget dessen Verbrauch, sonst die laufende Stunde.
+    /// Ring: mit laufender Pomodoro-Phase deren verstrichener Anteil (Arbeit in Projektfarbe,
+    /// Pause neutral), sonst mit Budget dessen Verbrauch, sonst die laufende Stunde.
     private func dial(durationSize: CGFloat, buttonSize: CGFloat, barWidth: CGFloat) -> some View {
         let budget = entry.budget
-        let color = budget.map { BudgetPalette.color(for: $0.fraction, project: project.color) } ?? project.color
-        let progress = budget.map { min(1, $0.fraction) } ?? HourRing.hourProgress(entry.runningDuration)
+        let pomodoro = entry.pomodoro
+        let color: Color
+        let progress: Double
+        let label: String
+        if let pomodoro {
+            color = pomodoro.isBreak ? .secondary : project.color
+            progress = pomodoro.fraction
+            label = pomodoro.accessibilityText
+        } else if let budget {
+            color = BudgetPalette.color(for: budget.fraction, project: project.color)
+            progress = min(1, budget.fraction)
+            label = "Budget \(budget.label)"
+        } else {
+            color = project.color
+            progress = HourRing.hourProgress(entry.runningDuration)
+            label = "Laufende Stunde"
+        }
         return RingDial(
             color: color,
             progress: progress,
@@ -210,7 +237,9 @@ struct RingRunningView: View {
                     .contentTransition(.numericText())
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
-                if let fraction = entry.breakFraction {
+                // Mit Pomodoro ist der Ring selbst der Strich; die Restzeit steht unter dem Ring
+                // (in der Mitte kollidierte sie mit dem Stopp-Knopf).
+                if pomodoro == nil, let fraction = entry.breakFraction {
                     BreakProgressBar(fraction: fraction, tint: project.color)
                         .frame(width: barWidth)
                 }
@@ -218,7 +247,24 @@ struct RingRunningView: View {
             .padding(.horizontal, 12)
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel(budget.map { "Budget \($0.label)" } ?? "Laufende Stunde")
+        .accessibilityLabel(label)
+    }
+}
+
+/// Unter dem Ring: „Pomodoro 2/4 · 🍅 23 min“ bzw. „Pomodoro 2/4 · Pause 7 min“.
+struct PomodoroCycleLabel: View {
+    @Environment(\.widgetRenderingMode) private var renderingMode
+    let pomodoro: PomodoroDisplay
+
+    var body: some View {
+        (Text(pomodoro.cycleLabel).fontWeight(.medium) + Text(" · \(pomodoro.label)"))
+            .font(.caption2)
+            .monospacedDigit()
+            .foregroundStyle(renderingMode == .fullColor ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
+            .contentTransition(.numericText())
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+            .accessibilityLabel(pomodoro.accessibilityText)
     }
 }
 
@@ -246,6 +292,7 @@ struct RingIdleView: View {
             VStack(spacing: 6) {
                 title
                 dial(button: nil, compact: false)
+                todayBelowDial
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
@@ -253,6 +300,7 @@ struct RingIdleView: View {
                 VStack(spacing: 6) {
                     title
                     dial(button: nil, compact: false)
+                    todayBelowDial
                 }
                 .frame(width: 136)
                 VStack(alignment: .leading, spacing: 0) {
@@ -333,14 +381,17 @@ struct RingIdleView: View {
             .minimumScaleFactor(0.8)
     }
 
+    /// Gepunkteter Ring mit der Tagessumme – bzw. in einer Pomodoro-Pause ein neutraler Ring mit
+    /// dem Restanteil und „Pause 7:00“ in der Mitte.
     private func dial(button: RingRoundButton?, compact: Bool) -> some View {
-        RingDial(color: .secondary, progress: nil, button: button) {
+        let pomodoro = entry.pomodoroBreak
+        return RingDial(color: .secondary, progress: pomodoro.map { 1 - $0.fraction }, button: button) {
             VStack(spacing: 0) {
-                Text("Heute")
+                Text(pomodoro == nil ? "Heute" : "Pause")
                     .font(.caption2.weight(.medium))
                     .foregroundStyle(.secondary)
-                Text(DurationFormat.hourMinute(entry.todayTotal))
-                    .font(.system(size: durationFontSize(compact ? 24 : 28, for: entry.todayTotal), weight: .semibold, design: .rounded))
+                Text(pomodoro?.clock ?? DurationFormat.hourMinute(entry.todayTotal))
+                    .font(.system(size: durationFontSize(compact ? 24 : 28, for: pomodoro == nil ? entry.todayTotal : 0), weight: .semibold, design: .rounded))
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
                     .contentTransition(.numericText())
@@ -348,6 +399,17 @@ struct RingIdleView: View {
                     .minimumScaleFactor(0.5)
             }
             .padding(.horizontal, 14)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(pomodoro?.accessibilityText ?? "Heute \(DurationFormat.hourMinute(entry.todayTotal))")
+        }
+    }
+
+    /// In der Pomodoro-Pause steht die Tagessumme nicht im Ring, sondern (mittel/groß) darunter.
+    @ViewBuilder
+    private var todayBelowDial: some View {
+        if entry.pomodoroBreak != nil {
+            TodayLabel(total: entry.todayTotal, font: .caption2)
+                .foregroundStyle(.secondary)
         }
     }
 }

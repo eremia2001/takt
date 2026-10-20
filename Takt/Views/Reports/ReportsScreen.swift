@@ -2,22 +2,29 @@ import SwiftUI
 import TaktCore
 
 // Ansicht „Berichte“ in der Formensprache von „Heute“. Von oben nach unten:
-//   Kopfzeile: Tag · Woche · Monat · Zeitraum, Blättern, Titel; rechts Export und Toggl-Import.
+//   Kopfzeile: Tag · Woche · Monat · Jahr · Zeitraum, Blättern, Titel; rechts Export und Toggl-Import.
 //   Kennzahlen: Gesamt · Business/Privat · Abrechenbar · Umsatz; in der Woche ggf. Wochenziel.
 //   Verlauf: gestapelte Balken in Projektfarben, freie Tage schraffiert, Fokus-Kennzahlen darüber.
 //   Projekte: Tabelle mit Summenzeile, Zeilen klappen Aufschlüsselung nach Tag und Einträge auf.
-// Rein darstellend: Daten kommen als `ReportsData`, Aktionen als `ReportsActions`.
+// Im Reiter „Jahr“ stattdessen `YearReportsContent` (Monate, Kunden, Tag-Anteile, Projekte).
+// Rein darstellend: Daten kommen als `ReportsData` bzw. `YearReportsData`, Aktionen als `ReportsActions`.
 
 struct ReportsScreen: View {
     @Binding var period: ReportPeriod
     /// `nil`, solange noch nichts geladen ist.
     let data: ReportsData?
+    /// Gewähltes Jahr im Reiter „Jahr“; `nil` = `period` gilt.
+    var year: Binding<Int?> = .constant(nil)
+    /// Jahresbericht für `year`; `nil`, solange noch nichts geladen ist.
+    var yearData: YearReportsData?
     var now: Date = .now
     var notice: String?
     var actions = ReportsActions()
     /// Nur für das Render-Harness: aufgeklappte Projekte und überfahrener Balken.
     var initiallyExpanded: Set<UUID> = []
     var initialHover: Date?
+    var initialYearHover: Int?
+    var initialYearMode: YearChartMode = .hours
 
     @Environment(\.colorScheme) private var scheme
     private var theme: DesignTheme { DesignTheme(scheme: scheme) }
@@ -27,12 +34,14 @@ struct ReportsScreen: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ReportsHeader(period: $period, now: now, actions: actions, theme: theme)
+            ReportsHeader(period: $period, year: year, now: now, actions: actions, theme: theme)
                 .padding(.horizontal, Self.sideInset)
                 .padding(.top, 4)
                 .padding(.bottom, 16)
 
-            if let data, !data.isEmpty {
+            if let selectedYear = year.wrappedValue {
+                yearBody(selectedYear)
+            } else if let data, !data.isEmpty {
                 ScrollView {
                     content(data)
                         .padding(.horizontal, Self.sideInset)
@@ -54,6 +63,43 @@ struct ReportsScreen: View {
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
+    }
+
+    // MARK: Jahr
+
+    @ViewBuilder
+    private func yearBody(_ selectedYear: Int) -> some View {
+        if let yearData, yearData.year == selectedYear, !yearData.isEmpty {
+            ScrollView {
+                YearReportsContent(
+                    data: yearData,
+                    theme: theme,
+                    initiallyExpanded: initiallyExpanded,
+                    initialHover: initialYearHover,
+                    initialMode: initialYearMode
+                )
+                .padding(.horizontal, Self.sideInset)
+                .padding(.bottom, 24)
+            }
+            .scrollIndicators(.automatic)
+        } else if let yearData, yearData.year == selectedYear {
+            placeholder(symbol: "chart.bar", text: "Keine Einträge in \(String(selectedYear))")
+        } else {
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func placeholder(symbol: String, text: String) -> some View {
+        VStack(spacing: 6) {
+            Image(systemName: symbol)
+                .font(.system(size: 22, weight: .regular))
+                .foregroundStyle(theme.tertiary)
+            Text(text)
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.bottom, 40)
     }
 
     private func toast(_ text: String) -> some View {

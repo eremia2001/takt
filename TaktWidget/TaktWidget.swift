@@ -132,6 +132,46 @@ extension WidgetSnapshot {
 
     /// Kein Projekt angelegt (auch Rückfall bei Lesefehlern).
     static let empty = WidgetSnapshot(running: nil, recent: [], todayCompleted: 0)
+
+    /// Dieselbe Momentaufnahme mit anderem Pomodoro-Zustand.
+    func withPomodoro(_ pomodoro: PomodoroState?) -> WidgetSnapshot {
+        WidgetSnapshot(
+            running: running,
+            recent: recent,
+            todayCompleted: todayCompleted,
+            switchTargets: switchTargets,
+            allProjects: allProjects,
+            todayEntries: todayEntries,
+            runningNextStep: runningNextStep,
+            plannedBlock: plannedBlock,
+            breakReminderMinutes: breakReminderMinutes,
+            runningBudget: runningBudget,
+            fixedProjectID: fixedProjectID,
+            fixedProjectRunningElsewhere: fixedProjectRunningElsewhere,
+            pomodoro: pomodoro
+        )
+    }
+
+    /// Pomodoro-Phase für Vorschauen: `elapsed` Minuten vorbei, `remaining` Minuten übrig.
+    static func previewPomodoro(_ phase: PomodoroState.Phase, elapsed: Double, remaining: Double, cycle: Int = 2) -> PomodoroState {
+        let now = Date.now
+        return PomodoroState(
+            enabled: true,
+            phase: phase,
+            phaseEndsAt: now.addingTimeInterval(remaining * 60),
+            cycle: cycle,
+            cyclesBeforeLongBreak: 4,
+            // `updatedAt` = Beginn der Phase (so schreibt es der PomodoroController).
+            updatedAt: now.addingTimeInterval(-elapsed * 60)
+        )
+    }
+
+    /// Läuft, Pomodoro-Arbeit 2/4, noch 23 von 50 Minuten.
+    static let previewPomodoroWork = placeholder.withPomodoro(previewPomodoro(.work, elapsed: 27, remaining: 23))
+    /// Läuft (ohne automatischen Stopp) in der Pomodoro-Pause, noch 7 von 10 Minuten.
+    static let previewPomodoroBreakRunning = placeholder.withPomodoro(previewPomodoro(.shortBreak, elapsed: 3, remaining: 7))
+    /// Nichts läuft, Pomodoro-Pause, noch 7 von 10 Minuten.
+    static let previewPomodoroBreakIdle = previewIdle.withPomodoro(previewPomodoro(.shortBreak, elapsed: 3, remaining: 7))
 }
 
 #Preview("Klein", as: .systemSmall) {
@@ -142,6 +182,45 @@ extension WidgetSnapshot {
     TaktEntry(date: .now, snapshot: .placeholder, style: .colorField)
     TaktEntry(date: .now, snapshot: .placeholder, style: .ring)
     TaktEntry(date: .now, snapshot: .empty)
+}
+
+#Preview("Pomodoro", as: .systemSmall) {
+    TaktWidget()
+} timeline: {
+    TaktEntry(date: .now, snapshot: .previewPomodoroWork, style: .plain)
+    TaktEntry(date: .now, snapshot: .previewPomodoroBreakRunning, style: .plain)
+    TaktEntry(date: .now, snapshot: .previewPomodoroBreakIdle, style: .plain)
+    TaktEntry(date: .now, snapshot: .previewPomodoroWork, style: .colorField)
+    TaktEntry(date: .now, snapshot: .previewPomodoroBreakRunning, style: .colorField)
+    TaktEntry(date: .now, snapshot: .previewPomodoroBreakIdle, style: .colorField)
+    TaktEntry(date: .now, snapshot: .previewPomodoroWork, style: .ring)
+    TaktEntry(date: .now, snapshot: .previewPomodoroBreakRunning, style: .ring)
+    TaktEntry(date: .now, snapshot: .previewPomodoroBreakIdle, style: .ring)
+}
+
+#Preview("Pomodoro mittel", as: .systemMedium) {
+    TaktWidget()
+} timeline: {
+    TaktEntry(date: .now, snapshot: .previewPomodoroWork, style: .plain)
+    TaktEntry(date: .now, snapshot: .previewPomodoroBreakRunning, style: .plain)
+    TaktEntry(date: .now, snapshot: .previewPomodoroBreakIdle, style: .plain)
+    TaktEntry(date: .now, snapshot: .previewPomodoroWork, style: .colorField)
+    TaktEntry(date: .now, snapshot: .previewPomodoroBreakRunning, style: .colorField)
+    TaktEntry(date: .now, snapshot: .previewPomodoroBreakIdle, style: .colorField)
+    TaktEntry(date: .now, snapshot: .previewPomodoroWork, style: .ring)
+    TaktEntry(date: .now, snapshot: .previewPomodoroBreakRunning, style: .ring)
+    TaktEntry(date: .now, snapshot: .previewPomodoroBreakIdle, style: .ring)
+}
+
+#Preview("Pomodoro groß", as: .systemLarge) {
+    TaktWidget()
+} timeline: {
+    TaktEntry(date: .now, snapshot: .previewPomodoroWork, style: .plain)
+    TaktEntry(date: .now, snapshot: .previewPomodoroBreakIdle, style: .plain)
+    TaktEntry(date: .now, snapshot: .previewPomodoroWork, style: .colorField)
+    TaktEntry(date: .now, snapshot: .previewPomodoroBreakIdle, style: .colorField)
+    TaktEntry(date: .now, snapshot: .previewPomodoroWork, style: .ring)
+    TaktEntry(date: .now, snapshot: .previewPomodoroBreakIdle, style: .ring)
 }
 
 #Preview("Mittel", as: .systemMedium) {

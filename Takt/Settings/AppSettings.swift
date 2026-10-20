@@ -180,6 +180,25 @@ final class AppSettings {
         didSet { defaults.set(globalShortcutModifiers, forKey: Key.globalShortcutModifiers) }
     }
 
+    // MARK: Menüleiste (Stile)
+
+    /// Darstellung in der Menüleiste (Symbol, Kompakt, Text, Kapsel, Ring); Standard Text.
+    var menuBarStyle: MenuBarStyle {
+        didSet { defaults.set(menuBarStyle.rawValue, forKey: Key.menuBarStyle) }
+    }
+    /// Projektname in Text- und Kapsel-Stil zeigen.
+    var menuBarShowProjectName: Bool {
+        didSet { defaults.set(menuBarShowProjectName, forKey: Key.menuBarShowProjectName) }
+    }
+    /// Tagessumme statt Laufzeit des aktuellen Eintrags zeigen.
+    var menuBarShowTodayTotal: Bool {
+        didSet { defaults.set(menuBarShowTodayTotal, forKey: Key.menuBarShowTodayTotal) }
+    }
+    /// Darstellung, wenn nichts läuft (nur Symbol, mit Tagessumme, ausgeblendet).
+    var menuBarIdleMode: MenuBarIdleMode {
+        didSet { defaults.set(menuBarIdleMode.rawValue, forKey: Key.menuBarIdleMode) }
+    }
+
     // MARK: Widget
 
     /// Standardstil für neue Widgets. Liegt nicht in `defaults`, sondern in der App-Group-Suite
@@ -302,6 +321,10 @@ final class AppSettings {
         static let quickEntryHotKeyKeyCode = "settings.quickEntryHotKeyKeyCode"
         static let quickEntryHotKeyModifiers = "settings.quickEntryHotKeyModifiers"
         static let quickEntryInMenuBar = "settings.quickEntryInMenuBar"
+        static let menuBarStyle = "settings.menuBarStyle"
+        static let menuBarShowProjectName = "settings.menuBarShowProjectName"
+        static let menuBarShowTodayTotal = "settings.menuBarShowTodayTotal"
+        static let menuBarIdleMode = "settings.menuBarIdleMode"
     }
 
     /// Standard-Kurzbefehl: ⌃⌥⌘T.
@@ -353,6 +376,10 @@ final class AppSettings {
             Key.quickEntryHotKeyKeyCode: Self.defaultQuickEntryKeyCode,
             Key.quickEntryHotKeyModifiers: Self.defaultQuickEntryModifiers,
             Key.quickEntryInMenuBar: true,
+            Key.menuBarStyle: MenuBarStyle.text.rawValue,
+            Key.menuBarShowProjectName: true,
+            Key.menuBarShowTodayTotal: false,
+            Key.menuBarIdleMode: MenuBarIdleMode.symbol.rawValue,
         ])
 
         musicEnabled = defaults.bool(forKey: Key.musicEnabled)
@@ -407,6 +434,10 @@ final class AppSettings {
         let storedQuickModifiers = (defaults.object(forKey: Key.quickEntryHotKeyModifiers) as? NSNumber)?.uintValue ?? 0
         quickEntryHotKeyModifiers = storedQuickModifiers == 0 ? Self.defaultQuickEntryModifiers : storedQuickModifiers
         quickEntryInMenuBar = defaults.bool(forKey: Key.quickEntryInMenuBar)
+        menuBarStyle = defaults.string(forKey: Key.menuBarStyle).flatMap(MenuBarStyle.init(rawValue:)) ?? .text
+        menuBarShowProjectName = defaults.bool(forKey: Key.menuBarShowProjectName)
+        menuBarShowTodayTotal = defaults.bool(forKey: Key.menuBarShowTodayTotal)
+        menuBarIdleMode = defaults.string(forKey: Key.menuBarIdleMode).flatMap(MenuBarIdleMode.init(rawValue:)) ?? .symbol
 
         // `didSet` greift in `init` nicht: Pausenerinnerung und Wochenziel einmal beim Start für das Widget spiegeln.
         SharedSettings.breakReminderEnabled = breakReminderEnabled && !pomodoroEnabled

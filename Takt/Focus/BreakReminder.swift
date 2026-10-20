@@ -222,6 +222,14 @@ final class BreakReminder: NSObject, UNUserNotificationCenterDelegate {
         completionHandler([.banner, .list, .sound])
     }
 
+    /// Zusätzliche Empfänger für Antworten auf Mitteilungen. Ein Handler gibt `true` zurück,
+    /// wenn er die Antwort verarbeitet hat (dann wird nicht weitergesucht).
+    nonisolated(unsafe) private static var responseHandlers: [(UNNotificationResponse) -> Bool] = []
+
+    static func addResponseHandler(_ handler: @escaping (UNNotificationResponse) -> Bool) {
+        responseHandlers.append(handler)
+    }
+
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse,
@@ -241,6 +249,11 @@ final class BreakReminder: NSObject, UNUserNotificationCenterDelegate {
         }
         if PomodoroController.handles(response.notification) {
             PomodoroController.handleNotificationResponse(response)
+            completionHandler()
+            return
+        }
+        // Weitere Empfänger (Budget-Warnung, Aktivität …) registrieren sich über `addResponseHandler`.
+        for handler in Self.responseHandlers where handler(response) {
             completionHandler()
             return
         }

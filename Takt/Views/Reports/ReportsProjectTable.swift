@@ -2,18 +2,72 @@ import SwiftUI
 import TaktCore
 
 /// Tabelle je Projekt mit Summenzeile. Ein Klick auf eine Zeile klappt die Aufschlüsselung
-/// nach Tag (sofern Tags vergeben sind) und die Einträge des Projekts im Zeitraum auf.
+/// nach Tag (sofern Tags vergeben sind) und die Einträge des Projekts im Zeitraum auf – im
+/// Jahr statt der (zu vielen) Einträge den Monatsverlauf des Projekts.
 struct ReportsProjectTable: View {
-    let data: ReportsData
     let theme: DesignTheme
+    private let rows: [ProjectReportRow]
+    private let totals: Totals
+    private let currencyCode: String
+    private let hasAnyRate: Bool
+    private let detail: Detail
 
     @State private var expanded: Set<UUID>
     @State private var hoveredRow: UUID?
 
+    /// Inhalt einer aufgeklappten Zeile.
+    private enum Detail {
+        case entries(ReportsData)
+        case months(YearReportsData)
+    }
+
+    /// Werte der Summenzeile.
+    private struct Totals {
+        var entryCount: Int
+        var total: TimeInterval
+        var roundedTotal: TimeInterval
+        var roundedBillable: TimeInterval
+        var amount: Decimal
+    }
+
     init(data: ReportsData, theme: DesignTheme, initiallyExpanded: Set<UUID> = []) {
-        self.data = data
+        let report = data.report
         self.theme = theme
+        rows = report.rows
+        totals = Totals(
+            entryCount: report.rows.reduce(0) { $0 + $1.entryCount },
+            total: report.total,
+            roundedTotal: report.roundedTotal,
+            roundedBillable: report.roundedBillable,
+            amount: report.amount
+        )
+        currencyCode = data.currencyCode
+        hasAnyRate = data.hasAnyRate
+        detail = .entries(data)
         _expanded = State(initialValue: initiallyExpanded)
+    }
+
+    init(year data: YearReportsData, theme: DesignTheme, initiallyExpanded: Set<UUID> = []) {
+        self.theme = theme
+        rows = data.report.byProject
+        totals = Totals(
+            entryCount: data.entryCount,
+            total: data.report.total,
+            roundedTotal: data.roundedTotal,
+            roundedBillable: data.roundedBillable,
+            amount: data.report.amount
+        )
+        currencyCode = data.currencyCode
+        hasAnyRate = data.hasAnyRate
+        detail = .months(data)
+        _expanded = State(initialValue: initiallyExpanded)
+    }
+
+    private var expandHelp: (open: String, close: String) {
+        switch detail {
+        case .entries: ("Einträge anzeigen", "Einträge zuklappen")
+        case .months: ("Monatsverlauf anzeigen", "Monatsverlauf zuklappen")
+        }
     }
 
     /// Feste Spaltenbreiten; der Name nimmt den Rest.
@@ -30,12 +84,17 @@ struct ReportsProjectTable: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            ForEach(data.report.rows, id: \.project.id) { row in
+            ForEach(rows, id: \.project.id) { row in
                 Rectangle().fill(theme.hairline).frame(height: 1)
                 projectRow(row)
                 if expanded.contains(row.project.id) {
-                    entryRows(for: row)
-                        .transition(.opacity)
+                    Group {
+                        switch detail {
+                        case .entries(let data): entryRows(for: row, data: data)
+                        case .months(let data): monthRows(for: row, data: data)
+                        }
+                    }
+                    .transition(.opacity)
                 }
             }
             Rectangle().fill(theme.hairline).frame(height: 1)
@@ -56,7 +115,7 @@ struct ReportsProjectTable: View {
             Text("Gerundet").frame(width: Column.rounded, alignment: .trailing)
             Text("Abrechenbar").frame(width: Column.billable, alignment: .trailing)
             Text("Satz").frame(width: Column.rate, alignment: .trailing)
-            Text("Betrag \(data.currencyCode)").frame(width: Column.amount, alignment: .trailing)
+            Text("Betrag \(currencyCode)").frame(width: Column.amount, alignment: .trailing)
         }
         .font(.system(size: 11, weight: .medium))
         .foregroundStyle(theme.tertiary)
@@ -137,9 +196,9 @@ struct ReportsProjectTable: View {
         .onHover { inside in
             if inside { hoveredRow = id } else if hoveredRow == id { hoveredRow = nil }
         }
-        .help(isExpanded ? "Einträge zuklappen" : "Einträge anzeigen")
+        .help(isExpanded ? expandHelp.close : expandHelp.open)
         .accessibilityElement(children: .combine)
-        .accessibilityHint(isExpanded ? "Einträge zuklappen" : "Einträge anzeigen")
+        .accessibilityHint(isExpanded ? expandHelp.close : expandHelp.open)
     }
 
     private enum NumberStyle { case primary, secondary, tertiary }
@@ -155,7 +214,7 @@ struct ReportsProjectTable: View {
 
     // MARK: Einträge (aufgeklappt)
 
-    private func entryRows(for row: ProjectReportRow) -> some View {
+    private func entryRows(for row: ProjectReportRow, data: ReportsData) -> some View {
         let entries = data.entries(for: row.project.id)
         return VStack(alignment: .leading, spacing: 0) {
             if data.hasTags(row) {
@@ -244,11 +303,61 @@ struct ReportsProjectTable: View {
         }
     }
 
+    // MARK: Monatsverlauf (Jahr, aufgeklappt)
+
+    /// Zwölf Mini-Balken in Projektfarbe, daneben stärkster Monat und Ø je aktivem Monat,
+    /// darunter wie sonst die Aufschlüsselung nach Tag.
+    private func monthRows(for row: ProjectReportRow, data: YearReportsData) -> some View {
+        let values = data.months(for: row.project.id)
+        let peak = values.max() ?? 0
+        let peakIndex = values.firstIndex(of: peak) ?? 0
+        let activeMonths = values.filter { $0 > 0 }.count
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .bottom, spacing: 28) {
+                ProjectMonthBars(values: values, color: Color(hex: row.project.colorHex), data: data, theme: theme)
+                VStack(alignment: .leading, spacing: 5) {
+                    if peak > 0 {
+                        statLine("stärkster Monat",
+                                 "\(ReportsFormat.monthsLong[peakIndex]) · \(ReportsFormat.duration(peak))")
+                        statLine("aktiv in",
+                                 activeMonths == 1 ? "1 Monat" : "\(activeMonths) Monaten")
+                        statLine("Ø je aktivem Monat",
+                                 ReportsFormat.duration(row.duration / Double(max(1, activeMonths))))
+                    }
+                }
+                .padding(.bottom, 16)
+                Spacer(minLength: 0)
+            }
+            .padding(.top, 6)
+            .padding(.bottom, 12)
+            if row.byTag.contains(where: { $0.tag != nil }) {
+                tagBreakdown(row)
+                    .padding(.bottom, 4)
+            }
+        }
+        .padding(.leading, 17)
+        .padding(.top, 2)
+        .padding(.bottom, 10)
+    }
+
+    private func statLine(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(label)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(theme.tertiary)
+                .frame(width: 112, alignment: .leading)
+            Text(value)
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+        }
+        .lineLimit(1)
+    }
+
     // MARK: Summe
 
     private var sumRow: some View {
-        let report = data.report
-        let entryCount = report.rows.reduce(0) { $0 + $1.entryCount }
+        let report = totals
+        let entryCount = totals.entryCount
         return HStack(spacing: 0) {
             Text("Summe")
                 .font(.system(size: 14, weight: .semibold))
@@ -263,13 +372,56 @@ struct ReportsProjectTable: View {
             number(ReportsFormat.duration(report.roundedTotal), width: Column.rounded, style: .secondary)
             number(ReportsFormat.duration(report.roundedBillable), width: Column.billable, style: .secondary)
             Color.clear.frame(width: Column.rate, height: 1)
-            Text(data.hasAnyRate ? ReportsFormat.money(report.amount) : "–")
+            Text(hasAnyRate ? ReportsFormat.money(report.amount) : "–")
                 .font(.system(size: 14, weight: .bold, design: .rounded))
                 .monospacedDigit()
-                .foregroundStyle(data.hasAnyRate ? AnyShapeStyle(.primary) : AnyShapeStyle(theme.tertiary))
+                .foregroundStyle(hasAnyRate ? AnyShapeStyle(.primary) : AnyShapeStyle(theme.tertiary))
                 .frame(width: Column.amount, alignment: .trailing)
         }
         .lineLimit(1)
         .padding(.vertical, 12)
+    }
+}
+
+/// Monatsverlauf eines Projekts: zwölf schmale Balken mit Monatsinitialen. Der laufende Monat
+/// ist beschriftet hervorgehoben, künftige Monate bleiben blass; Tooltip mit Monat und Dauer.
+struct ProjectMonthBars: View {
+    let values: [TimeInterval]
+    let color: Color
+    let data: YearReportsData
+    let theme: DesignTheme
+
+    private static let barWidth: CGFloat = 14
+    private static let height: CGFloat = 40
+
+    var body: some View {
+        let peak = max(1, values.max() ?? 0)
+        HStack(alignment: .bottom, spacing: 7) {
+            ForEach(Array(values.enumerated()), id: \.offset) { index, seconds in
+                let isFuture = data.isFuture(index)
+                let isCurrent = data.currentMonthIndex == index
+                VStack(spacing: 4) {
+                    ZStack(alignment: .bottom) {
+                        RoundedRectangle(cornerRadius: 3, style: .continuous)
+                            .fill(theme.track.opacity(isFuture ? 0.5 : 1))
+                            .frame(height: Self.height)
+                        if seconds > 0 {
+                            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                                .fill(color.opacity(isFuture ? 0.35 : 1))
+                                .frame(height: max(3, Self.height * seconds / peak))
+                        }
+                    }
+                    .frame(width: Self.barWidth, height: Self.height)
+                    Text(ReportsFormat.monthInitials[index])
+                        .font(.system(size: 10, weight: isCurrent ? .bold : .medium))
+                        .foregroundStyle(isCurrent ? AnyShapeStyle(.primary)
+                                         : AnyShapeStyle(theme.tertiary.opacity(isFuture ? 0.5 : 1)))
+                }
+                .help("\(ReportsFormat.monthsLong[index]) \(String(data.year)): \(ReportsFormat.duration(seconds))")
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(ReportsFormat.monthsLong[index]): \(ReportsFormat.duration(seconds))")
+            }
+        }
+        .monospacedDigit()
     }
 }

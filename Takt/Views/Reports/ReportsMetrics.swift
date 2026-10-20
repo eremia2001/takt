@@ -72,35 +72,11 @@ struct ReportsMetrics: View {
         @ViewBuilder value: () -> Value,
         @ViewBuilder caption: () -> Caption
     ) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text(title)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(theme.tertiary)
-                .lineLimit(1)
-            value()
-                .padding(.top, 4)
-            caption()
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(theme.tertiary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.85)
-                .padding(.top, 6)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(theme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(theme.hairline, lineWidth: 1))
-        .accessibilityElement(children: .combine)
+        ReportsTile(title: title, theme: theme, value: value, caption: caption)
     }
 
     private func bigNumber(_ text: String, dimmed: Bool = false) -> some View {
-        Text(text)
-            .font(.system(size: 30, weight: .bold, design: .rounded))
-            .monospacedDigit()
-            .foregroundStyle(dimmed ? AnyShapeStyle(theme.tertiary) : AnyShapeStyle(.primary))
-            .lineLimit(1)
-            .minimumScaleFactor(0.6)
+        ReportsBigNumber(text: text, dimmed: dimmed, theme: theme)
     }
 
     /// Anteil Business (kräftig) zu Privat (zart) – farblos, Farbe gehört den Projekten.
@@ -200,5 +176,62 @@ struct ReportsGoalRow: View {
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(theme.hairline, lineWidth: 1))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Wochenziel \(ReportsFormat.duration(goal.achieved)) von \(ReportsFormat.duration(goal.adjustedTarget)), \(ReportsFormat.percent(goal.fraction))")
+    }
+}
+
+/// Kachel der Kennzahlen-Reihe: kleine Überschrift, große Zahl, leise Beschriftung darunter.
+/// Gemeinsam für alle Zeiträume und das Jahr.
+struct ReportsTile<Value: View, Caption: View>: View {
+    let title: String
+    let theme: DesignTheme
+    let value: Value
+    let caption: Caption
+
+    init(title: String, theme: DesignTheme, @ViewBuilder value: () -> Value, @ViewBuilder caption: () -> Caption) {
+        self.title = title
+        self.theme = theme
+        self.value = value()
+        self.caption = caption()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(title)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(theme.tertiary)
+                .lineLimit(1)
+            value
+                .padding(.top, 4)
+            // Beschriftungen aller Kacheln auf einer Linie, auch wenn eine Zahl kleiner skaliert.
+            Spacer(minLength: 0)
+            caption
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(theme.tertiary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+                .padding(.top, 6)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(theme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(theme.hairline, lineWidth: 1))
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// Große Zahl einer Kachel (gerundete Schrift, Ziffern gleich breit).
+struct ReportsBigNumber: View {
+    let text: String
+    var dimmed = false
+    let theme: DesignTheme
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 30, weight: .bold, design: .rounded))
+            .monospacedDigit()
+            .foregroundStyle(dimmed ? AnyShapeStyle(theme.tertiary) : AnyShapeStyle(.primary))
+            .lineLimit(1)
+            .minimumScaleFactor(0.6)
     }
 }

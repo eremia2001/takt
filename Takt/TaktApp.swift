@@ -18,6 +18,12 @@ struct TaktApp: App {
     @State private var idleDetector: IdleDetector
     /// Pomodoro-Ablauf (Menüleiste, Mitteilungen); lebt so lange wie die App.
     @State private var pomodoroController: PomodoroController
+    /// Budget-Warnungen (80 % / 100 %); lebt so lange wie die App.
+    @State private var budgetWatcher: BudgetWatcher
+    /// Aktivitäts-Erkennung (App, Fenster, Repository → Projektvorschläge); lebt so lange wie die App.
+    @State private var activityMonitor: ActivityMonitor
+    /// Kalender-Anbindung: Termine in „Heute“, Spiegelung in den Kalender „Takt“.
+    @State private var calendarService: CalendarService
 
     init() {
         // Alle Mitteilungs-Kategorien in einem Rutsch (Pause, geplanter Block, vergessener Timer,
@@ -41,6 +47,10 @@ struct TaktApp: App {
         _pomodoroController = State(initialValue: PomodoroController(
             store: store, settings: settings, breakReminder: breakReminder, menuBar: menuBarController
         ))
+        BreakReminder.addResponseHandler(BudgetWatcher.handleNotificationResponse)
+        _budgetWatcher = State(initialValue: BudgetWatcher(store: store, settings: settings))
+        _activityMonitor = State(initialValue: ActivityMonitor(store: store, settings: settings))
+        _calendarService = State(initialValue: CalendarService(store: store, settings: settings))
     }
 
     var body: some Scene {
@@ -51,6 +61,7 @@ struct TaktApp: App {
                 .environment(settings)
                 .environment(musicController)
                 .environment(breakReminder)
+                .environment(calendarService)
                 // Eingehende URLs (z. B. `takt://today` vom Widget) im vorhandenen Fenster
                 // behandeln statt ein neues zu öffnen.
                 .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
@@ -74,6 +85,8 @@ struct TaktApp: App {
                 .environment(breakReminder)
                 .environment(menuBarController)
                 .environment(pomodoroController)
+                .environment(activityMonitor)
+                .environment(calendarService)
         }
 
         // Fenster-Stil statt Menü: eigene ruhige Oberfläche wie in der App.
@@ -96,8 +109,17 @@ struct TaktApp: App {
     /// wird der Schalter mit ausgeschaltet.
     private var menuBarInserted: Binding<Bool> {
         Binding(
-            get: { settings.menuBarEnabled },
-            set: { settings.menuBarEnabled = $0 }
+            get: {
+                settings.menuBarEnabled
+                    && MenuBarLabel.isVisible(settings: settings, store: store, pomodoro: pomodoroController)
+            },
+            set: { inserted in
+                // Nur echtes Entfernen durch den Nutzer (⌘-Ziehen) schaltet die Menüleiste aus,
+                // nicht das Ausblenden in der Pause.
+                if inserted || MenuBarLabel.isVisible(settings: settings, store: store, pomodoro: pomodoroController) {
+                    settings.menuBarEnabled = inserted
+                }
+            }
         )
     }
 }

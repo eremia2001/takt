@@ -6,7 +6,10 @@ import SwiftUI
 //   Farbkarte: läuft → Projektfarbe füllt die Karte (wie Widget „Farbfläche“);
 //              Pause → neutrale Karte mit Tagessumme und „Weiter mit …“.
 //   Nächster Block: geplanter Start („14:00 · Kundenportal“) oder „Block planen…“.
-//   Tagesleiste: Zeitfenster mit farbigen Segmenten und Jetzt-Marke, Fokus-Kennzahlen darüber.
+//   Hinweis: Termin läuft, Timer auf anderem Projekt („Wechseln zu …“), siehe `TodayEvents`.
+//   Tagesleiste: Zeitfenster mit farbigen Segmenten und Jetzt-Marke, Fokus-Kennzahlen darüber;
+//                Kalendertermine als schraffierte schmale Spur oberhalb.
+//   Termine heute: kompakte Liste mit „Als Eintrag“ (nur mit Kalender-Anbindung).
 //   Einträge: schlichte Liste, neueste oben.
 // Rein darstellend: Daten kommen als `TodayData`, Aktionen als `TodayActions`.
 
@@ -16,6 +19,8 @@ struct TodayScreen: View {
     /// Nur für Vorschauen und das Render-Harness: vorbelegter Text der Schnelleingabe.
     var initialQuickText = ""
     @Environment(\.colorScheme) private var scheme
+    /// Ausgeblendete Hinweise „Termin läuft“ (je Termin).
+    @State private var dismissedHints: Set<String> = []
     private var theme: DesignTheme { DesignTheme(scheme: scheme) }
 
     var body: some View {
@@ -33,7 +38,18 @@ struct TodayScreen: View {
             }
             TodayNextBlockRow(data: data, theme: theme, actions: actions)
                 .padding(.top, -8)
-            TodayDayStrip(data: data, theme: theme)
+            if let hint = data.meetingHint, !dismissedHints.contains(hint.event.id) {
+                TodayMeetingHintRow(hint: hint, theme: theme, actions: actions) {
+                    dismissedHints.insert(hint.event.id)
+                }
+                .padding(.top, -10)
+            }
+            VStack(alignment: .leading, spacing: 10) {
+                TodayDayStrip(data: data, theme: theme)
+                if !data.events.isEmpty || !data.allDayEvents.isEmpty {
+                    TodayEventList(data: data, theme: theme, actions: actions)
+                }
+            }
             TodayEntryList(data: data, theme: theme, actions: actions)
         }
         .padding(.horizontal, Self.sideInset)
@@ -607,37 +623,56 @@ private struct TodayDayStrip: View {
             }
             GeometryReader { geo in
                 let width = geo.size.width
-                ZStack(alignment: .leading) {
+                // Mit Terminen: schmale Terminspur (6 pt) über den Eintragssegmenten.
+                let hasEvents = !data.events.isEmpty
+                let laneHeight = Self.laneHeight(hasEvents: hasEvents)
+                let entryTop: CGFloat = hasEvents ? Self.eventLane + Self.eventGap + 5 : 5
+                ZStack(alignment: .topLeading) {
                     // Stundenraster
                     ForEach(Array(window), id: \.self) { hour in
                         Rectangle()
                             .fill(theme.hairline)
-                            .frame(width: 1, height: 22)
-                            .offset(x: x(Double(hour), width, window))
+                            .frame(width: 1, height: laneHeight - 4)
+                            .offset(x: x(Double(hour), width, window), y: 2)
+                    }
+                    if hasEvents {
+                        RoundedRectangle(cornerRadius: 2, style: .continuous)
+                            .fill(theme.track)
+                            .frame(width: width, height: Self.eventLane)
+                            .offset(y: 5)
+                        ForEach(data.events) { event in
+                            let start = x(data.hourOfDay(event.start), width, window)
+                            let end = x(data.hourOfDay(event.end), width, window)
+                            TodayEventSegment(color: event.calendarColor, dark: theme.dark)
+                                .frame(width: max(3, end - start - 1.5), height: Self.eventLane)
+                                .offset(x: start, y: 5)
+                                .help("\(event.title) · \(TodayFormat.clock(event.start))–\(TodayFormat.clock(event.end))")
+                        }
                     }
                     RoundedRectangle(cornerRadius: 5, style: .continuous)
                         .fill(theme.track)
-                        .frame(height: 16)
+                        .frame(width: width, height: 16)
+                        .offset(y: entryTop)
                     ForEach(data.entries) { entry in
                         let start = x(data.hourOfDay(entry.start), width, window)
                         let end = x(data.hourOfDay(entry.end ?? data.now), width, window)
                         RoundedRectangle(cornerRadius: 4, style: .continuous)
                             .fill(entry.project.color.opacity(entry.isRunning ? 0.85 : 1))
                             .frame(width: max(3, end - start - 1.5), height: 16)
-                            .offset(x: start)
+                            .offset(x: start, y: entryTop)
                     }
                     // Jetzt-Marke (nur innerhalb des sichtbaren Fensters)
                     let nowHour = data.hourOfDay(data.now)
                     if nowHour >= Double(window.lowerBound), nowHour <= Double(window.upperBound) {
                         Capsule()
                             .fill(.primary)
-                            .frame(width: 2, height: 26)
+                            .frame(width: 2, height: laneHeight)
                             .offset(x: x(nowHour, width, window) - 1)
                     }
                 }
-                .frame(height: 26)
+                .frame(width: width, height: laneHeight, alignment: .topLeading)
             }
-            .frame(height: 26)
+            .frame(height: Self.laneHeight(hasEvents: !data.events.isEmpty))
             .accessibilityElement()
             .accessibilityLabel("Tagesverlauf")
             GeometryReader { geo in
@@ -656,6 +691,15 @@ private struct TodayDayStrip: View {
             .frame(height: 12)
             .accessibilityHidden(true)
         }
+    }
+
+    /// Höhe der Terminspur und Abstand zu den Einträgen.
+    static let eventLane: CGFloat = 6
+    static let eventGap: CGFloat = 4
+
+    /// Gesamthöhe der Leiste: 26 pt, mit Terminspur entsprechend mehr.
+    static func laneHeight(hasEvents: Bool) -> CGFloat {
+        hasEvents ? 26 + eventLane + eventGap : 26
     }
 
     private func x(_ hour: Double, _ width: CGFloat, _ window: ClosedRange<Int>) -> CGFloat {
@@ -776,5 +820,10 @@ private struct TodayEntryList: View {
 #Preview("Pause") {
     TodayScreen(data: .sampleIdle)
         .frame(width: 920, height: 548)
+}
+
+#Preview("Mit Terminen") {
+    TodayScreen(data: .sampleWithEvents)
+        .frame(width: 920, height: 640)
 }
 #endif

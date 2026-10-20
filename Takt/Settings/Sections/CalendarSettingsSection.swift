@@ -1,22 +1,408 @@
+import EventKit
 import SwiftUI
 import TaktCore
 
-/// Abschnitt „Kalender“: Platzhalter, bis die Kalender-Anbindung (EventKit) folgt.
-/// Einstellungen liegen bereits in `AppSettings` (`calendar…`), Regeln und Verknüpfungen im Store.
+/// Abschnitt „Kalender“: Zugriff, Termine in „Heute“, sichtbare Kalender, Spiegelung erfasster
+/// Zeiten in den Kalender „Takt“ und Regeln Termin → Projekt. EventKit liegt im `CalendarService`,
+/// Regeln im Store.
 struct CalendarSettingsSection: View {
+    /// Optional, damit die Einstellungen auch ohne verdrahteten Dienst öffnen.
+    @Environment(CalendarService.self) private var calendarService: CalendarService?
+
     var body: some View {
+        if let calendarService {
+            CalendarSettingsContent(service: calendarService)
+        } else {
+            Section("Kalender") {
+                Text("Die Kalender-Anbindung ist in dieser Version nicht aktiv.")
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+private struct CalendarSettingsContent: View {
+    let service: CalendarService
+    @Environment(AppSettings.self) private var settings
+
+    @State private var isDisableDialogShown = false
+    @State private var isRequesting = false
+
+    var body: some View {
+        @Bindable var settings = settings
         Section("Kalender") {
-            Label {
+            LabeledContent {
+                accessButton
+            } label: {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Kalender-Anbindung folgt")
-                    Text("Termine in „Heute“ anzeigen, Einträge in einen Kalender spiegeln und Termine per Regel Projekten zuordnen.")
+                    Text("Zugriff auf Kalender")
+                    Text(service.statusText)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-            } icon: {
-                Image(systemName: "calendar")
+            }
+            Toggle("Termine in „Heute“ anzeigen", isOn: $settings.calendarShowEvents)
+                .disabled(!service.hasFullAccess)
+        }
+
+        if service.hasFullAccess {
+            visibleCalendarsSection
+            mirrorSection
+            Section {
+                CalendarRuleList()
+            } header: {
+                Text("Regeln Termin → Projekt")
+            } footer: {
+                Text("Die erste passende Regel bestimmt das Projekt beim Übernehmen eines Termins. Reihenfolge per Ziehen am Griff.")
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
+        }
+    }
+
+    // MARK: Zugriff
+
+    @ViewBuilder
+    private var accessButton: some View {
+        if service.hasFullAccess {
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+                .accessibilityLabel("Zugriff erlaubt")
+        } else if service.canRequestAccess {
+            Button("Zugriff erlauben") {
+                isRequesting = true
+                Task {
+                    await service.requestAccess()
+                    isRequesting = false
+                }
+            }
+            .disabled(isRequesting)
+        } else {
+            Button("Systemeinstellungen …") { service.openPrivacySettings() }
+        }
+    }
+
+    // MARK: Sichtbare Kalender
+
+    private var visibleCalendarsSection: some View {
+        Section {
+            ForEach(service.calendars.filter { !service.isMirrorCalendar($0) }, id: \.calendarIdentifier) { calendar in
+                Toggle(isOn: Binding(
+                    get: { service.isVisible(calendar) },
+                    set: { service.setVisible($0, calendar: calendar) }
+                )) {
+                    HStack(spacing: 7) {
+                        Circle()
+                            .fill(Color(cgColor: calendar.cgColor))
+                            .frame(width: 8, height: 8)
+                        Text(calendar.title)
+                        if let source = calendar.source?.title {
+                            Text(source)
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                }
+                .toggleStyle(.checkbox)
+                .disabled(!settings.calendarShowEvents)
+            }
+        } header: {
+            Text("Angezeigte Kalender")
+        } footer: {
+            Text("Der Kalender „Takt“ erscheint nie in „Heute“ – er enthält deine Einträge selbst.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    // MARK: Spiegelung
+
+    private var mirrorSection: some View {
+        Section {
+            Toggle(isOn: mirrorBinding) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Erfasste Zeiten in den Kalender „Takt“ eintragen")
+                    Text("Ein Ereignis je Eintrag der letzten 30 Tage: Projekt (· #Tag), Notiz = Nächster Schritt.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Picker("Quelle", selection: sourceBinding) {
+                if service.mirrorSourceID == nil {
+                    Text("Bitte wählen").tag(String?.none)
+                }
+                ForEach(service.mirrorSources) { source in
+                    Text(source.label).tag(String?.some(source.id))
+                }
+            }
+            .disabled(service.mirrorSources.isEmpty)
+            LabeledContent("Mindestdauer") {
+                Stepper {
+                    Text("\(settings.calendarMirrorMinimumMinutes) min")
+                        .monospacedDigit()
+                } onIncrement: {
+                    settings.calendarMirrorMinimumMinutes = Self.minimumSteps.first { $0 > settings.calendarMirrorMinimumMinutes } ?? 240
+                } onDecrement: {
+                    settings.calendarMirrorMinimumMinutes = Self.minimumSteps.last { $0 < settings.calendarMirrorMinimumMinutes } ?? 1
+                }
+            }
+            LabeledContent {
+                Button("Jetzt spiegeln") { service.mirrorNow() }
+                    .disabled(!settings.calendarMirrorEnabled || service.mirrorCalendar == nil)
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(countText)
+                    if let last = service.lastMirrorAt {
+                        Text("zuletzt \(ClockFormat.time(last))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            if let error = service.lastError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+        } header: {
+            Text("Zeiten in Kalender spiegeln")
+        }
+        .confirmationDialog(
+            "Spiegelung ausschalten?",
+            isPresented: $isDisableDialogShown
+        ) {
+            Button("Ereignisse behalten") { service.disableMirror(deleteEvents: false) }
+            Button("Ereignisse löschen", role: .destructive) { service.disableMirror(deleteEvents: true) }
+            Button("Abbrechen", role: .cancel) {}
+        } message: {
+            Text("Ereignisse im Kalender ‚Takt‘ behalten oder löschen? Andere Kalender bleiben unberührt.")
+        }
+    }
+
+    /// Stufen des Mindestdauer-Steppers (1–240 min).
+    private static let minimumSteps = [1, 2, 5, 10, 15, 20, 30, 45, 60, 90, 120, 180, 240]
+
+    private var countText: String {
+        switch service.mirroredCount {
+        case 0: "Noch keine Ereignisse gespiegelt"
+        case 1: "1 Ereignis gespiegelt"
+        default: "\(service.mirroredCount) Ereignisse gespiegelt"
+        }
+    }
+
+    /// Einschalten legt bei Bedarf den Kalender an; Ausschalten fragt nach den Ereignissen.
+    private var mirrorBinding: Binding<Bool> {
+        Binding(
+            get: { settings.calendarMirrorEnabled },
+            set: { isOn in
+                if isOn {
+                    service.enableMirror()
+                } else {
+                    isDisableDialogShown = true
+                }
+            }
+        )
+    }
+
+    private var sourceBinding: Binding<String?> {
+        Binding(
+            get: { service.mirrorSourceID },
+            set: { id in
+                guard let id, id != service.mirrorSourceID else { return }
+                service.useMirrorSource(id)
+            }
+        )
+    }
+}
+
+// MARK: - Regeln
+
+/// Tabelle der Kalender-Regeln: Art, Muster, Projekt; − je Zeile, + in der Zeile darunter,
+/// Reihenfolge per Ziehen am Griff.
+private struct CalendarRuleList: View {
+    @Environment(TaktStore.self) private var store
+
+    @State private var newKind: CalendarRuleKind = .titleContains
+    @State private var newPattern = ""
+    @State private var newProjectId: UUID?
+    @State private var dropTarget: UUID?
+
+    var body: some View {
+        if store.calendarRules.isEmpty {
+            Text("Noch keine Regeln. Beispiel: Titel enthält „Gerlach“ → Kundenportal.")
+                .foregroundStyle(.secondary)
+        }
+        ForEach(store.calendarRules) { rule in
+            CalendarRuleRow(rule: rule)
+                .overlay(alignment: .top) {
+                    if dropTarget == rule.id {
+                        Rectangle().fill(Color.accentColor).frame(height: 2).offset(y: -5)
+                    }
+                }
+                .dropDestination(for: String.self) { items, _ in
+                    defer { dropTarget = nil }
+                    guard let text = items.first, let id = UUID(uuidString: text) else { return false }
+                    return move(id, before: rule.id)
+                } isTargeted: { targeted in
+                    if targeted { dropTarget = rule.id } else if dropTarget == rule.id { dropTarget = nil }
+                }
+        }
+        addRow
+    }
+
+    private var addRow: some View {
+        HStack(spacing: 8) {
+            // Platz des Griffs, damit die Spalten mit den Regeln fluchten.
+            Color.clear.frame(width: 14, height: 1)
+            Picker("Art", selection: $newKind) {
+                ForEach(CalendarRuleKind.allCases, id: \.self) { kind in
+                    Text(kind.title).tag(kind)
+                }
+            }
+            .labelsHidden()
+            .frame(width: 118)
+            TextField("Muster", text: $newPattern, prompt: Text(CalendarRuleRow.placeholder(newKind)))
+                .labelsHidden()
+                .onSubmit(add)
+            Picker("Projekt", selection: $newProjectId) {
+                Text("Projekt …").tag(UUID?.none)
+                ForEach(store.projects) { project in
+                    Text(project.name).tag(UUID?.some(project.id))
+                }
+            }
+            .labelsHidden()
+            .frame(width: 130)
+            Button(action: add) {
+                Image(systemName: "plus.circle")
+            }
+            .buttonStyle(.borderless)
+            .disabled(!canAdd)
+            .help("Regel hinzufügen")
+            .accessibilityLabel("Regel hinzufügen")
+        }
+    }
+
+    private var canAdd: Bool {
+        newProjectId != nil && !newPattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func add() {
+        guard canAdd, let projectId = newProjectId else { return }
+        if store.addCalendarRule(kind: newKind, pattern: newPattern, projectId: projectId) {
+            newPattern = ""
+        }
+    }
+
+    /// Verschiebt die Regel `id` an die Stelle der Regel `target`.
+    private func move(_ id: UUID, before target: UUID) -> Bool {
+        let rules = store.calendarRules
+        guard id != target,
+              let from = rules.firstIndex(where: { $0.id == id }),
+              let to = rules.firstIndex(where: { $0.id == target }) else { return false }
+        // `move(fromOffsets:toOffset:)`: nach unten zählt die Position hinter dem Ziel.
+        store.reorderCalendarRules(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
+        return true
+    }
+}
+
+/// Eine Regel: Griff, Art, Muster (wird bei Enter bzw. Verlassen gesichert), Projekt, −.
+private struct CalendarRuleRow: View {
+    let rule: CalendarRule
+    @Environment(TaktStore.self) private var store
+
+    @State private var pattern: String
+    @FocusState private var isPatternFocused: Bool
+
+    init(rule: CalendarRule) {
+        self.rule = rule
+        _pattern = State(initialValue: rule.pattern)
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "line.3.horizontal")
+                .foregroundStyle(.tertiary)
+                .frame(width: 14)
+                .contentShape(Rectangle())
+                .draggable(rule.id.uuidString) {
+                    Text(rule.pattern).padding(4)
+                }
+                .help("Ziehen, um die Reihenfolge zu ändern")
+            Picker("Art", selection: Binding(
+                get: { rule.kind },
+                set: { kind in
+                    var changed = rule
+                    changed.kind = kind
+                    store.saveCalendarRule(changed)
+                }
+            )) {
+                ForEach(CalendarRuleKind.allCases, id: \.self) { kind in
+                    Text(kind.title).tag(kind)
+                }
+            }
+            .labelsHidden()
+            .frame(width: 118)
+            TextField("Muster", text: $pattern, prompt: Text(Self.placeholder(rule.kind)))
+                .labelsHidden()
+                .focused($isPatternFocused)
+                .onSubmit(savePattern)
+                .onChange(of: isPatternFocused) { _, focused in
+                    if !focused { savePattern() }
+                }
+                .onChange(of: rule.pattern) { _, stored in
+                    if !isPatternFocused { pattern = stored }
+                }
+            Picker("Projekt", selection: Binding(
+                get: { rule.projectId },
+                set: { projectId in
+                    var changed = rule
+                    changed.projectId = projectId
+                    store.saveCalendarRule(changed)
+                }
+            )) {
+                ForEach(projectOptions) { project in
+                    Text(project.isArchived ? "\(project.name) (archiviert)" : project.name).tag(project.id)
+                }
+            }
+            .labelsHidden()
+            .frame(width: 130)
+            Button {
+                store.deleteCalendarRule(rule)
+            } label: {
+                Image(systemName: "minus.circle")
+            }
+            .buttonStyle(.borderless)
+            .help("Regel löschen")
+            .accessibilityLabel("Regel löschen")
+        }
+    }
+
+    /// Aktive Projekte, dazu das der Regel, falls es archiviert ist.
+    private var projectOptions: [Project] {
+        var options = store.projects
+        if !options.contains(where: { $0.id == rule.projectId }), let current = store.project(id: rule.projectId) {
+            options.append(current)
+        }
+        return options
+    }
+
+    private func savePattern() {
+        let trimmed = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed != rule.pattern else { return }
+        guard !trimmed.isEmpty else {
+            pattern = rule.pattern
+            return
+        }
+        var changed = rule
+        changed.pattern = trimmed
+        store.saveCalendarRule(changed)
+    }
+
+    static func placeholder(_ kind: CalendarRuleKind) -> String {
+        switch kind {
+        case .calendarName: "z. B. Arbeit"
+        case .titleContains: "z. B. Gerlach"
+        case .attendeeDomain: "z. B. acme.de"
         }
     }
 }

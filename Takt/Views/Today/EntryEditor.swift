@@ -5,6 +5,9 @@ import TaktCore
 struct EntryDraft: Identifiable {
     let entry: TimeEntry
     let isNew: Bool
+    /// Projekt noch offen (z. B. Termin ohne passende Regel): Der Picker startet leer und
+    /// verlangt eine Auswahl; `entry.projectId` ist dann nur ein Platzhalter.
+    var needsProject = false
 
     var id: UUID { entry.id }
 }
@@ -12,11 +15,12 @@ struct EntryDraft: Identifiable {
 /// Sheet zum Anlegen und Bearbeiten eines Eintrags.
 struct EntryEditor: View {
     @Environment(TaktStore.self) private var store
+    @Environment(CalendarService.self) private var calendarService: CalendarService?
     @Environment(\.dismiss) private var dismiss
 
     let draft: EntryDraft
 
-    @State private var projectId: UUID
+    @State private var projectId: UUID?
     @State private var startedAt: Date
     @State private var endedAt: Date
     @State private var nextStep: String
@@ -26,7 +30,7 @@ struct EntryEditor: View {
 
     init(draft: EntryDraft) {
         self.draft = draft
-        _projectId = State(initialValue: draft.entry.projectId)
+        _projectId = State(initialValue: draft.needsProject ? nil : draft.entry.projectId)
         _startedAt = State(initialValue: draft.entry.startedAt)
         _endedAt = State(initialValue: draft.entry.endedAt ?? .now)
         _nextStep = State(initialValue: draft.entry.nextStep ?? "")
@@ -40,8 +44,11 @@ struct EntryEditor: View {
         VStack(spacing: 0) {
             Form {
                 Picker("Projekt", selection: $projectId) {
+                    if projectId == nil {
+                        Text("Bitte wählen").tag(UUID?.none)
+                    }
                     ForEach(projectOptions) { project in
-                        Text(project.name).tag(project.id)
+                        Text(project.name).tag(UUID?.some(project.id))
                     }
                 }
 
@@ -57,7 +64,7 @@ struct EntryEditor: View {
 
                 TextField("Tag", text: $tag, prompt: Text("optional, z. B. Meeting"))
                 // Vorschläge: zuerst Tags dieses Projekts, zuletzt genutzte zuerst; Klick übernimmt.
-                let suggestions = store.tagSuggestions(projectId: projectId, prefix: tag)
+                let suggestions = store.tagSuggestions(projectId: projectId ?? draft.entry.projectId, prefix: tag)
                 if !TagSuggestionChips.visible(suggestions, text: tag).isEmpty {
                     TagSuggestionChips(text: $tag, suggestions: suggestions)
                         .frame(maxWidth: .infinity, alignment: .trailing)
@@ -110,6 +117,7 @@ struct EntryEditor: View {
     }
 
     private var validationMessage: String? {
+        if projectId == nil { return "Bitte ein Projekt wählen." }
         if isRunning {
             return startedAt > .now ? "Der Beginn liegt in der Zukunft." : nil
         }
@@ -119,6 +127,7 @@ struct EntryEditor: View {
     private func save() {
         let trimmed = nextStep.trimmingCharacters(in: .whitespacesAndNewlines)
         // Vom Entwurf ausgehen, damit Felder ohne Eingabe hier (z. B. „abrechenbar“) erhalten bleiben.
+        guard let projectId else { return }
         var entry = draft.entry
         entry.projectId = projectId
         entry.startedAt = startedAt
@@ -130,6 +139,8 @@ struct EntryEditor: View {
     }
 
     private func delete() {
+        // Gespiegeltes Kalenderereignis vor dem Eintrag entfernen (die Verknüpfung fällt per CASCADE).
+        calendarService?.willDelete(entryId: draft.entry.id)
         finish(store.deleteEntry(draft.entry))
     }
 

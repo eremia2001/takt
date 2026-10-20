@@ -3,7 +3,8 @@ import Carbon.HIToolbox
 import os
 
 /// Systemweiter Kurzbefehl über Carbon `RegisterEventHotKey` – ohne Drittbibliothek und ohne
-/// Bedienungshilfen-Berechtigung. Es gibt genau einen Kurzbefehl; `register` ersetzt ihn.
+/// Bedienungshilfen-Berechtigung. Jede Instanz verwaltet genau einen Kurzbefehl; `register` ersetzt ihn.
+/// Mehrere Instanzen (Start/Stopp, Schnelleingabe) brauchen verschiedene `id`s.
 @MainActor
 final class GlobalHotKey {
     /// Wird auf dem Main-Thread aufgerufen, sobald der Kurzbefehl gedrückt wurde.
@@ -14,8 +15,13 @@ final class GlobalHotKey {
 
     /// Kennung des Kurzbefehls („TAKT“ als Vierzeichen-Code), damit fremde Ereignisse nicht zählen.
     private static let signature: OSType = 0x5441_4B54
-    private static let hotKeyId: UInt32 = 1
+    /// Kennung innerhalb der Signatur; unterscheidet die Instanzen im gemeinsamen Ereignis-Handler.
+    let hotKeyId: UInt32
     private static let logger = Logger(subsystem: "dev.eremiya.takt", category: "hotkey")
+
+    init(id: UInt32 = 1) {
+        hotKeyId = id
+    }
 
     /// Ob gerade ein Kurzbefehl angemeldet ist.
     var isRegistered: Bool { hotKeyRef != nil }
@@ -27,7 +33,7 @@ final class GlobalHotKey {
         unregister()
         installHandlerIfNeeded()
 
-        let id = EventHotKeyID(signature: Self.signature, id: Self.hotKeyId)
+        let id = EventHotKeyID(signature: Self.signature, id: hotKeyId)
         var ref: EventHotKeyRef?
         let status = RegisterEventHotKey(
             UInt32(keyCode),
@@ -75,11 +81,13 @@ final class GlobalHotKey {
                     nil,
                     &id
                 )
-                guard result == noErr, id.signature == GlobalHotKey.signature, id.id == GlobalHotKey.hotKeyId else {
-                    return OSStatus(eventNotHandledErr)
-                }
                 // Carbon ruft auf dem Main-Thread (Ereignisschleife der App) auf.
                 let hotKey = Unmanaged<GlobalHotKey>.fromOpaque(context).takeUnretainedValue()
+                // Fremde Kennung → an den nächsten Handler (die andere Instanz) weiterreichen.
+                guard result == noErr, id.signature == GlobalHotKey.signature,
+                      id.id == MainActor.assumeIsolated({ hotKey.hotKeyId }) else {
+                    return OSStatus(eventNotHandledErr)
+                }
                 MainActor.assumeIsolated { hotKey.action() }
                 return noErr
             },

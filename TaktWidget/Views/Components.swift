@@ -115,6 +115,125 @@ struct BreakProgressBar: View {
     }
 }
 
+/// Pomodoro-Strich im Lauf-Zustand (statt des Pausenstrichs): Füllung = verstrichener Anteil der
+/// Phase, rechts „🍅 23 min“ bzw. „Pause 7 min“. `compact` (kleines Widget): ohne Beschriftung,
+/// davor die Tomate (Arbeit) bzw. eine Tasse (Pause).
+/// Arbeit in Projektfarbe, Pause neutral; auf der Farbfläche Weiß (Pause blasser).
+struct PomodoroProgressBar: View {
+    @Environment(\.widgetRenderingMode) private var renderingMode
+    let pomodoro: PomodoroDisplay
+    let tint: Color
+    var onColorField = false
+    var compact = false
+
+    var body: some View {
+        HStack(spacing: compact ? 4 : 6) {
+            if compact { glyph }
+            bar
+            if !compact {
+                Text(pomodoro.label)
+                    .font(.caption2)
+                    .monospacedDigit()
+                    .foregroundStyle(textStyle)
+                    .contentTransition(.numericText())
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+        }
+        .accessibilityElement()
+        .accessibilityLabel(pomodoro.accessibilityText)
+    }
+
+    @ViewBuilder
+    private var glyph: some View {
+        if pomodoro.isBreak {
+            Image(systemName: "cup.and.saucer.fill")
+                .font(.system(size: 8, weight: .semibold))
+                .foregroundStyle(textStyle)
+        } else {
+            Text("🍅").font(.system(size: 9))
+        }
+    }
+
+    private var bar: some View {
+        let tinted = renderingMode != .fullColor
+        let fill: Color
+        let track: Color
+        if onColorField {
+            fill = .white.opacity(pomodoro.isBreak ? 0.5 : 0.85)
+            track = .white.opacity(0.22)
+        } else if tinted {
+            fill = .primary.opacity(pomodoro.isBreak ? 0.45 : 0.7)
+            track = .primary.opacity(0.15)
+        } else if pomodoro.isBreak {
+            fill = .secondary.opacity(0.7)
+            track = .primary.opacity(0.1)
+        } else {
+            fill = tint.opacity(0.75)
+            track = tint.opacity(0.14)
+        }
+        return GeometryReader { proxy in
+            ZStack(alignment: .leading) {
+                Capsule().fill(track)
+                Capsule()
+                    .fill(fill)
+                    .frame(width: max(3, proxy.size.width * min(1, max(0, pomodoro.fraction))))
+                    .widgetAccentable()
+            }
+        }
+        .frame(height: 3)
+    }
+
+    private var textStyle: AnyShapeStyle {
+        if onColorField { return AnyShapeStyle(.white.opacity(0.85)) }
+        return AnyShapeStyle(.secondary)
+    }
+}
+
+/// Strich im Lauf-Zustand: mit laufender Pomodoro-Phase der Pomodoro-Strich, sonst der
+/// Pausenstrich (nur mit eingeschalteter Pausenerinnerung) – oder nichts.
+struct RunningProgressLine: View {
+    let entry: TaktEntry
+    let tint: Color
+    var onColorField = false
+    var compact = false
+
+    var body: some View {
+        if let pomodoro = entry.pomodoro {
+            PomodoroProgressBar(pomodoro: pomodoro, tint: tint, onColorField: onColorField, compact: compact)
+        } else if let fraction = entry.breakFraction {
+            BreakProgressBar(fraction: fraction, tint: tint, onColorField: onColorField)
+        }
+    }
+
+    /// Ob überhaupt ein Strich erscheint.
+    static func isVisible(_ entry: TaktEntry) -> Bool {
+        entry.pomodoro != nil || entry.breakFraction != nil
+    }
+}
+
+/// Pause-Zustand mit laufender Pomodoro-Pause: „Pause · noch 7 min“ mit Tasse.
+struct PomodoroBreakLine: View {
+    let pomodoro: PomodoroDisplay
+    var font: Font = .caption
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "cup.and.saucer.fill")
+                .font(.system(size: 9, weight: .semibold))
+            Text("Pause · noch \(pomodoro.remainingMinutes) min")
+                .font(font)
+                .monospacedDigit()
+                .contentTransition(.numericText())
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+        }
+        .foregroundStyle(.secondary)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(pomodoro.accessibilityText)
+    }
+}
+
 /// Zwei kleine Farbpunkte (14 pt) im kleinen Widget: Klick wechselt zum Projekt.
 struct SwitchDots: View {
     @Environment(\.widgetRenderingMode) private var renderingMode
@@ -291,4 +410,10 @@ func quickStartProjects(_ entry: TaktEntry, showsPlanned: Bool) -> [Project] {
         return Array(entry.snapshot.recent.prefix(WidgetSnapshot.maxRecent))
     }
     return Array(entry.snapshot.recent.filter { $0.id != block.project.id }.prefix(WidgetSnapshot.maxRecent - 1))
+}
+
+/// Kürzt die Schnellstarts, damit sie zusammen mit einem geplanten Block höchstens `maxRows`
+/// Zeilen belegen (kleines Widget mit Pomodoro-Pausenzeile).
+func quickStartProjects(_ projects: [Project], block: WidgetSnapshot.PlannedBlockInfo?, maxRows: Int) -> [Project] {
+    Array(projects.prefix(max(0, maxRows - (block == nil ? 0 : 1))))
 }

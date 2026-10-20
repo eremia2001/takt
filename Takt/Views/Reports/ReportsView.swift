@@ -5,12 +5,16 @@ import TaktCore
 /// Bereich „Berichte“: verbindet `ReportsScreen` mit Store, Einstellungen, CSV-Export und
 /// Toggl-Import. Lädt den Bericht neu bei Wechsel von Zeitraum oder Einstellungen, bei jeder
 /// Datenänderung (auch aus dem Widget) und – nur solange ein Timer läuft – minütlich.
+/// Im Reiter „Jahr“ (`year != nil`) gilt dasselbe für den Jahresbericht.
 struct ReportsView: View {
     @Environment(TaktStore.self) private var store
     @Environment(AppSettings.self) private var settings
 
     @State private var period: ReportPeriod = .week(.now)
     @State private var data: ReportsData?
+    /// Gewähltes Jahr im Reiter „Jahr“; `nil` = `period` gilt.
+    @State private var year: Int?
+    @State private var yearData: YearReportsData?
     @State private var notice: String?
     @State private var noticeID = 0
     @State private var isImportShown = false
@@ -34,6 +38,7 @@ struct ReportsView: View {
             reload()
         }
         .onChange(of: period) { reload() }
+        .onChange(of: year) { reload() }
         .onChange(of: settings.rounding) { reload() }
         .onChange(of: settings.defaultHourlyRate) { reload() }
         .onChange(of: settings.currencyCode) { reload() }
@@ -52,11 +57,14 @@ struct ReportsView: View {
         ReportsScreen(
             period: $period,
             data: data,
+            year: $year,
+            yearData: yearData,
             now: now,
             notice: notice,
             actions: ReportsActions(
                 exportEntries: { export(.entries) },
                 exportSummary: { export(.summary) },
+                exportYear: { export(.year) },
                 importToggl: { isImportShown = true },
                 editDaysOff: { isDaysOffShown = true }
             )
@@ -66,6 +74,10 @@ struct ReportsView: View {
     // MARK: Laden
 
     private func reload(now: Date = .now) {
+        if let year {
+            reloadYear(year, now: now)
+            return
+        }
         guard let report = store.report(
             for: period,
             rounding: settings.rounding,
@@ -83,9 +95,26 @@ struct ReportsView: View {
         )
     }
 
+    /// Jahresbericht und Einträge des Jahres (für den Monatsverlauf je Projekt).
+    private func reloadYear(_ year: Int, now: Date) {
+        guard let report = store.yearReport(
+            year: year,
+            rounding: settings.rounding,
+            defaultHourlyRate: settings.defaultHourlyRate,
+            now: now
+        ) else { return }
+        yearData = YearReportsData(
+            report: report,
+            entries: store.entries(in: report.interval),
+            rounding: settings.rounding,
+            currencyCode: settings.currencyCode,
+            now: now
+        )
+    }
+
     /// Monat für „Freie Tage“: enthält der Zeitraum heute, der heutige, sonst der seines Anfangs.
     private var daysOffMonth: Date {
-        let interval = period.interval(calendar: .current)
+        let interval = year.map { ReportsYear.interval($0, calendar: .current) } ?? period.interval(calendar: .current)
         return interval.contains(.now) ? .now : interval.start
     }
 
@@ -94,6 +123,10 @@ struct ReportsView: View {
     private func export(_ kind: CSVExporter.Kind) {
         let now = Date.now
         reload(now: now)
+        if let year {
+            exportYear(year, kind: kind, now: now)
+            return
+        }
         guard let data else { return }
         let content: String
         switch kind {
@@ -106,10 +139,33 @@ struct ReportsView: View {
                 defaultHourlyRate: settings.defaultHourlyRate,
                 now: now
             )
-        case .summary:
+        case .summary, .year:
             content = CSVExport.summary(data.report, calendar: .current)
         }
-        let name = CSVExporter.fileName(kind, period: period)
+        save(content, name: CSVExporter.fileName(kind == .year ? .summary : kind, period: period))
+    }
+
+    /// Reiter „Jahr“: Jahresübersicht (Monate + Kunden) oder alle Einträge des Jahres.
+    private func exportYear(_ year: Int, kind: CSVExporter.Kind, now: Date) {
+        guard let yearData, yearData.year == year else { return }
+        let content: String
+        switch kind {
+        case .entries:
+            content = CSVExport.entries(
+                store.entries(in: yearData.report.interval).sorted { $0.startedAt < $1.startedAt },
+                projects: Array(store.projectsById.values),
+                rounding: settings.rounding,
+                calendar: .current,
+                defaultHourlyRate: settings.defaultHourlyRate,
+                now: now
+            )
+        case .summary, .year:
+            content = CSVExporter.yearCSV(yearData)
+        }
+        save(content, name: CSVExporter.fileName(kind == .entries ? .entries : .year, year: year))
+    }
+
+    private func save(_ content: String, name: String) {
         Task { @MainActor in
             do {
                 if let url = try await CSVExporter.save(content, suggestedName: name) {

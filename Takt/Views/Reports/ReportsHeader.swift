@@ -6,6 +6,8 @@ import TaktCore
 /// Bricht in zwei Zeilen um, wenn das Fenster schmal ist.
 struct ReportsHeader: View {
     @Binding var period: ReportPeriod
+    /// Gewähltes Kalenderjahr im Reiter „Jahr“; `nil` = `period` gilt.
+    @Binding var year: Int?
     var now: Date
     var actions: ReportsActions
     let theme: DesignTheme
@@ -49,13 +51,21 @@ struct ReportsHeader: View {
 
     private var navigation: some View {
         HStack(spacing: 4) {
-            stepButton("chevron.left", help: "Vorheriger Zeitraum") {
-                period = period.previous(calendar: calendar)
+            stepButton("chevron.left", help: year == nil ? "Vorheriger Zeitraum" : "Vorheriges Jahr") {
+                if let year { self.year = year - 1 } else { period = period.previous(calendar: calendar) }
             }
-            stepButton("chevron.right", help: "Nächster Zeitraum") {
-                period = period.next(calendar: calendar)
+            stepButton("chevron.right", help: year == nil ? "Nächster Zeitraum" : "Nächstes Jahr") {
+                if let year { self.year = year + 1 } else { period = period.next(calendar: calendar) }
             }
-            if case .custom = period {
+            if let year {
+                // `verbatim`: sonst setzt die Lokalisierung einen Tausenderpunkt („2.026“).
+                Text(verbatim: String(year))
+                    .font(.system(size: 15, weight: .semibold))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .fixedSize()
+                    .padding(.leading, 6)
+            } else if case .custom = period {
                 customRange
                     .padding(.leading, 6)
             } else {
@@ -67,9 +77,13 @@ struct ReportsHeader: View {
                     .padding(.leading, 6)
             }
             // Beim freien Zeitraum wählt man die Daten selbst – dort kein „Heute“.
-            if !isCurrent, ReportPeriodKind(period) != .custom {
+            if !isCurrent, kindBinding.wrappedValue != .custom {
                 Button {
-                    period = ReportPeriodKind(period).period(from: .day(now), now: now, calendar: calendar)
+                    if year != nil {
+                        year = calendar.component(.year, from: now)
+                    } else {
+                        period = ReportPeriodKind(period).period(from: .day(now), now: now, calendar: calendar)
+                    }
                 } label: {
                     Text("Heute")
                         .font(.system(size: 12, weight: .medium))
@@ -116,13 +130,30 @@ struct ReportsHeader: View {
     }
 
     private var isCurrent: Bool {
-        period.interval(calendar: calendar).contains(now)
+        if let year { return year == calendar.component(.year, from: now) }
+        return period.interval(calendar: calendar).contains(now)
     }
 
+    /// Der gezeigte Zeitraum; im Reiter „Jahr“ das ganze Jahr als freier Zeitraum.
+    private var effectivePeriod: ReportPeriod {
+        if let year { return .custom(ReportsYear.interval(year, calendar: calendar)) }
+        return period
+    }
+
+    /// Wechsel der Art behält den Bezug: Jahr → Monat landet im heutigen Monat (aktuelles Jahr)
+    /// bzw. im Januar, Jahr → Zeitraum übernimmt das ganze Jahr.
     private var kindBinding: Binding<ReportPeriodKind> {
         Binding(
-            get: { ReportPeriodKind(period) },
-            set: { period = $0.period(from: period, now: now, calendar: calendar) }
+            get: { year != nil ? .year : ReportPeriodKind(period) },
+            set: { kind in
+                let current = effectivePeriod
+                if kind == .year {
+                    year = ReportsYear.year(for: current.interval(calendar: calendar), now: now, calendar: calendar)
+                } else {
+                    year = nil
+                    period = kind.period(from: current, now: now, calendar: calendar)
+                }
+            }
         )
     }
 
@@ -178,8 +209,13 @@ struct ReportsHeader: View {
             .accessibilityLabel("Freie Tage")
 
             Menu {
-                Button("Einträge als CSV …", action: actions.exportEntries)
-                Button("Zusammenfassung als CSV …", action: actions.exportSummary)
+                if year != nil {
+                    Button("Jahr als CSV …", action: actions.exportYear)
+                    Button("Einträge als CSV …", action: actions.exportEntries)
+                } else {
+                    Button("Einträge als CSV …", action: actions.exportEntries)
+                    Button("Zusammenfassung als CSV …", action: actions.exportSummary)
+                }
             } label: {
                 pillLabel("Exportieren", systemImage: "square.and.arrow.up")
             }

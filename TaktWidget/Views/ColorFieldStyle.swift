@@ -142,9 +142,7 @@ struct ColorFieldRunningView: View {
                     ColorFieldStopButton(color: project.color)
                         .alignmentGuide(.lastTextBaseline) { $0[.bottom] - 6 }
                 }
-                if let fraction = entry.breakFraction {
-                    BreakProgressBar(fraction: fraction, tint: project.color, onColorField: true)
-                }
+                RunningProgressLine(entry: entry, tint: project.color, onColorField: true, compact: family == .systemSmall)
             }
             .layoutPriority(2)
         }
@@ -216,22 +214,31 @@ struct ColorFieldIdleView: View {
     var body: some View {
         let projects = quickStartProjects(entry, showsPlanned: showsPlanned)
         let block = showsPlanned ? entry.plannedBlock : nil
+        let pomodoro = entry.pomodoroBreak
         if projects.isEmpty && block == nil {
             EmptyStateView(entry: entry)
         } else if family == .systemSmall {
             VStack(alignment: .leading, spacing: 0) {
                 title
+                if let pomodoro {
+                    PomodoroBreakLine(pomodoro: pomodoro, font: .caption.weight(.medium))
+                        .padding(.top, 1)
+                }
                 TodayLabel(total: entry.todayTotal, font: .caption.weight(.medium))
                     .foregroundStyle(.secondary)
                     .padding(.top, 1)
                 Spacer(minLength: 6)
-                pills(projects, block: block)
+                // Mit Pausenzeile reicht die Höhe nur für zwei Kapseln.
+                pills(pomodoro == nil ? projects : quickStartProjects(projects, block: block, maxRows: 2), block: block)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         } else {
             HStack(alignment: .top, spacing: 20) {
                 VStack(alignment: .leading, spacing: 0) {
                     title
+                    if let pomodoro {
+                        PomodoroBreakLine(pomodoro: pomodoro, font: .caption.weight(.medium)).padding(.top, 2)
+                    }
                     if let budget = entry.budget {
                         BudgetLabel(budget: budget).padding(.top, 2)
                     }

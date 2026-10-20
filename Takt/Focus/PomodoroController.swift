@@ -4,6 +4,7 @@ import Observation
 import os
 import TaktCore
 import UserNotifications
+import WidgetKit
 
 /// Pomodoro-Modus: Arbeit (`pomodoroWorkMinutes`) → kurze Pause → … nach
 /// `pomodoroCyclesBeforeLongBreak` Einheiten eine lange Pause.
@@ -16,7 +17,8 @@ import UserNotifications
 /// - Ende der Pause: Mitteilung „Pause vorbei – weiter mit …?“ mit Aktion „Weiter“ und eine
 ///   Einblendung wie beim Kurzbefehl. Ein Timer-Start während der Pause beendet sie vorzeitig.
 /// - Ersetzt die normale Pausenerinnerung (`BreakReminder` prüft `pomodoroEnabled`).
-/// - Zustand nur im Speicher; nach einem Neustart beginnt der Zyklus bei 1.
+/// - Zustand nur im Speicher; nach einem Neustart beginnt der Zyklus bei 1. Für das Widget wird er
+///   bei jeder Änderung als `PomodoroState` nach `SharedSettings.pomodoro` gespiegelt.
 @MainActor
 @Observable
 final class PomodoroController {
@@ -47,6 +49,9 @@ final class PomodoroController {
     @ObservationIgnored private var lastEnabled: Bool?
     /// Projekt der letzten Arbeitseinheit (Rückfall für „Weiter mit …“).
     @ObservationIgnored private var lastWorkProject: Project?
+    /// Zuletzt fürs Widget geschriebener Zustand (`nil` = gelöscht bzw. noch nie geschrieben).
+    @ObservationIgnored private var publishedState: PomodoroState?
+    @ObservationIgnored private var hasPublished = false
 
     /// Für die Weiterleitung aus dem Notification-Delegate.
     private static weak var current: PomodoroController?
@@ -167,6 +172,8 @@ final class PomodoroController {
             } else if wasEnabled {
                 reset()
             }
+            // Ein-/Ausschalten und App-Start: Widget-Zustand immer schreiben.
+            publishWidgetState()
             return
         }
         guard enabled else { return }
@@ -333,9 +340,12 @@ final class PomodoroController {
     }
 
     /// Wartet jeweils bis zur nächsten vollen Restminute (für die Anzeige) bzw. bis zum Phasenende.
+    /// Jeder Übergang (Start, Stopp, Phasenwechsel, Überspringen, geänderte Dauer) läuft hier
+    /// durch – deshalb wird hier auch der Widget-Zustand geschrieben.
     private func restartLoop() {
         loopTask?.cancel()
         loopTask = nil
+        publishWidgetState()
         guard settings.pomodoroEnabled, phaseEnd != nil else { return }
         loopTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -360,6 +370,56 @@ final class PomodoroController {
         } else {
             breakDidEnd(announce: true)
         }
+    }
+
+    // MARK: Widget
+
+    /// Spiegelt den Zustand nach `SharedSettings.pomodoro` und lädt die Widget-Timelines neu –
+    /// nur, wenn er sich geändert hat. Ausgeschaltet wird der Zustand gelöscht.
+    ///
+    /// `updatedAt` ist der **Beginn der Phase** (bereit: jetzt): Das Widget berechnet daraus und
+    /// aus `phaseEndsAt` den verstrichenen Anteil (Pomodoro-Strich, Ring).
+    private func publishWidgetState() {
+        let state: PomodoroState?
+        if settings.pomodoroEnabled {
+            let cycles = settings.pomodoroCyclesBeforeLongBreak
+            let widgetPhase: PomodoroState.Phase = switch phase {
+            case .work: .work
+            case .shortBreak: .shortBreak
+            case .longBreak: .longBreak
+            case nil: .idle
+            }
+            // Bereit: Zeitpunkt beibehalten, solange es bereit bleibt (sonst ändert sich der
+            // Zustand bei jedem Durchlauf und das Widget würde ständig neu geladen).
+            let start: Date
+            if let phaseStart, phase != nil {
+                start = phaseStart
+            } else if let previous = publishedState, previous.phase == .idle {
+                start = previous.updatedAt
+            } else {
+                start = .now
+            }
+            state = PomodoroState(
+                enabled: true,
+                phase: widgetPhase,
+                phaseEndsAt: phaseEnd,
+                cycle: min(cycle, cycles),
+                cyclesBeforeLongBreak: cycles,
+                updatedAt: start
+            )
+        } else {
+            state = nil
+        }
+        guard !hasPublished || state != publishedState else { return }
+        hasPublished = true
+        publishedState = state
+        if let state {
+            SharedSettings.pomodoro = state
+            Self.logger.debug("Pomodoro-Zustand fürs Widget: \(state.phase.rawValue, privacy: .public), Einheit \(state.cycle).")
+        } else {
+            SharedSettings.clearPomodoro()
+        }
+        WidgetCenter.shared.reloadAllTimelines()
     }
 
     // MARK: Mitteilungen

@@ -41,6 +41,20 @@ enum NotificationCategories {
         static let resume = "pomodoro.resume"
     }
 
+    /// Budget-Warnung (80 % / 100 %): nur Hinweis, „Projekt öffnen“ holt Takt nach vorn.
+    enum Budget {
+        static let category = "dev.eremiya.takt.budget"
+        static let open = "budget.open"
+    }
+
+    /// Aktivität: Timer läuft auf X, erkannt wurde Y.
+    enum Activity {
+        static let category = "dev.eremiya.takt.activity"
+        static let switchProject = "activity.switch"
+        static let startProject = "activity.start"
+        static let ignore = "activity.ignore"
+    }
+
     private static let logger = Logger(subsystem: "dev.eremiya.takt", category: "focus")
 
     /// Registriert alle Kategorien auf einmal (ersetzt einen älteren Satz vollständig).
@@ -72,6 +86,20 @@ enum NotificationCategories {
             UNNotificationCategory(
                 identifier: PomodoroBreakOver.category,
                 actions: [UNNotificationAction(identifier: PomodoroBreakOver.resume, title: "Weiter")],
+                intentIdentifiers: []
+            ),
+            UNNotificationCategory(
+                identifier: Budget.category,
+                actions: [UNNotificationAction(identifier: Budget.open, title: "Projekt öffnen", options: [.foreground])],
+                intentIdentifiers: []
+            ),
+            UNNotificationCategory(
+                identifier: Activity.category,
+                actions: [
+                    UNNotificationAction(identifier: Activity.switchProject, title: "Wechseln"),
+                    UNNotificationAction(identifier: Activity.startProject, title: "Starten"),
+                    UNNotificationAction(identifier: Activity.ignore, title: "Ignorieren"),
+                ],
                 intentIdentifiers: []
             ),
         ]

@@ -5,9 +5,9 @@ import WidgetKit
 /// Stil „Schlicht“, Zustand „läuft“.
 ///
 /// Klein: Projekt (und, wenn Platz ist, „Nächster Schritt“) oben, Dauer mit Stopp-Knopf,
-/// darunter der Pausenstrich, ganz unten die Wechsel-Punkte und „Heute h:mm“.
+/// darunter der Pausen- bzw. Pomodoro-Strich, ganz unten die Wechsel-Punkte und „Heute h:mm“.
 /// Mittel (und Karte im großen Widget): links Projekt, nächster Schritt, Dauer, Stopp-Knopf und
-/// Pausenstrich, rechts „Wechseln zu“; im mittleren Widget unten rechts geplanter Block, Budget
+/// Pausen- bzw. Pomodoro-Strich, rechts „Wechseln zu“; im mittleren Widget unten rechts geplanter Block, Budget
 /// und Tagessumme (im großen stehen sie in dessen Fußzeile).
 struct RunningView: View {
     let family: WidgetFamily
@@ -43,8 +43,8 @@ struct RunningView: View {
                 Spacer(minLength: 0)
                 StopButton(color: project.color)
             }
-            if let fraction = entry.breakFraction {
-                BreakProgressBar(fraction: fraction, tint: project.color)
+            if RunningProgressLine.isVisible(entry) {
+                RunningProgressLine(entry: entry, tint: project.color, compact: true)
                     .padding(.top, 2)
             }
             HStack(spacing: 6) {
@@ -75,9 +75,7 @@ struct RunningView: View {
                         BigDuration(interval: entry.runningDuration)
                         StopButton(color: project.color)
                     }
-                    if let fraction = entry.breakFraction {
-                        BreakProgressBar(fraction: fraction, tint: project.color)
-                    }
+                    RunningProgressLine(entry: entry, tint: project.color)
                 }
                 .fixedSize(horizontal: true, vertical: false)
                 .layoutPriority(2)

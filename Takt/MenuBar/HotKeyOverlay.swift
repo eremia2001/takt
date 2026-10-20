@@ -83,7 +83,8 @@ final class HotKeyOverlay {
 
 /// Inhalt der Rückmeldung.
 struct HotKeyOverlayMessage {
-    enum Kind { case started, stopped, info, pomodoro }
+    /// `saved`: Eintrag aus der Schnelleingabe übernommen.
+    enum Kind { case started, stopped, info, pomodoro, saved }
 
     var kind: Kind
     var text: String
@@ -110,6 +111,10 @@ struct HotKeyOverlayView: View {
                 Image(systemName: "info.circle")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.secondary)
+            case .saved:
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(message.colorHex == nil ? Color.green : color)
             case .pomodoro:
                 Image(systemName: "timer")
                     .font(.system(size: 12, weight: .semibold))

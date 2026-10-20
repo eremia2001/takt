@@ -34,6 +34,10 @@ struct MenuBarPanelData {
     var now: Date
     /// Pomodoro-Zeile unter der Karte; `nil` ohne laufende Pomodoro-Phase.
     var pomodoro: PomodoroItem? = nil
+    /// Schnelleingabe-Feld oberhalb der Projektliste (`quickEntryInMenuBar`, nur mit Projekten).
+    var showsQuickEntryField = false
+    /// Kurzbefehl des schwebenden Schnelleingabe-Fensters, z. B. „⌃⌥⌘N“; `nil` = aus.
+    var quickEntryShortcut: String? = nil
 
     struct PomodoroItem: Equatable {
         /// z. B. „Pomodoro 2/4 · Arbeit · noch 23 min“.
@@ -49,6 +53,10 @@ struct MenuBarPanelActions {
     var openSettings: () -> Void = {}
     var quit: () -> Void = {}
     var skipPomodoroPhase: () -> Void = {}
+    /// Auswerten und Übernehmen der Schnelleingabe.
+    var quickEntry = QuickEntryHandlers()
+    /// „Schnelleingabe…“: Popover schließen, schwebendes Fenster öffnen.
+    var openQuickEntry: () -> Void = {}
 }
 
 struct MenuBarPanel: View {
@@ -78,8 +86,24 @@ struct MenuBarPanel: View {
                     .padding(.top, 8)
             }
 
-            MenuBarProjectList(data: data, theme: theme, start: actions.start)
+            if data.showsQuickEntryField {
+                QuickEntryField(
+                    size: .compact,
+                    theme: theme,
+                    handlers: actions.quickEntry,
+                    openPanel: actions.openQuickEntry,
+                    panelShortcut: data.quickEntryShortcut
+                )
+                .padding(.horizontal, 10)
                 .padding(.top, 10)
+            }
+
+            MenuBarProjectList(
+                data: data, theme: theme, start: actions.start,
+                // Ohne Feld führt ein Knopf in der Kopfzeile zum schwebenden Fenster.
+                openQuickEntry: data.showsQuickEntryField ? nil : actions.openQuickEntry
+            )
+            .padding(.top, 10)
 
             Rectangle()
                 .fill(theme.hairline)
@@ -238,6 +262,7 @@ private struct MenuBarProjectList: View {
     let data: MenuBarPanelData
     let theme: DesignTheme
     let start: (UUID) -> Void
+    var openQuickEntry: (() -> Void)? = nil
 
     /// Ab dieser Zahl scrollt die Liste, damit das Fenster nicht über den Bildschirm wächst.
     private static let maxVisibleRows = 9
@@ -245,11 +270,21 @@ private struct MenuBarProjectList: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text("Projekte")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(theme.tertiary)
-                .padding(.horizontal, 16)
-                .padding(.bottom, 2)
+            HStack(alignment: .firstTextBaseline) {
+                Text("Projekte")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(theme.tertiary)
+                Spacer(minLength: 8)
+                if let openQuickEntry {
+                    Button("Schnelleingabe…", action: openQuickEntry)
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .help(data.quickEntryShortcut.map { "Schnelleingabe öffnen (\($0))" } ?? "Schnelleingabe öffnen")
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 2)
 
             if data.projects.isEmpty {
                 Text("Lege in Takt unter „Projekte“ ein erstes Projekt an.")

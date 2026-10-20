@@ -4,6 +4,7 @@ import WidgetKit
 
 /// Stil „Schlicht“, Zustand „Pause“.
 ///
+/// Pomodoro-Pause ohne Timer: darunter „Pause · noch 7 min“ (klein dann nur zwei Schnellstart-Zeilen).
 /// Klein: „Nichts läuft“ und „Heute h:mm“ oben, darunter bis zu drei Schnellstarts – mit
 /// geplantem Block ersetzt dieser die dritte Zeile.
 /// Mittel (und Karte im großen Widget): links „Nichts läuft“ und groß die Tagessumme, rechts die
@@ -18,22 +19,31 @@ struct IdleView: View {
     var body: some View {
         let projects = quickStartProjects(entry, showsPlanned: showsPlanned)
         let block = showsPlanned ? entry.plannedBlock : nil
+        let pomodoro = entry.pomodoroBreak
         if projects.isEmpty && block == nil {
             EmptyStateView(entry: entry)
         } else if family == .systemSmall {
             VStack(alignment: .leading, spacing: 0) {
                 title
+                if let pomodoro {
+                    PomodoroBreakLine(pomodoro: pomodoro)
+                        .padding(.top, 1)
+                }
                 TodayLabel(total: entry.todayTotal)
                     .foregroundStyle(.secondary)
                     .padding(.top, 1)
                 Spacer(minLength: 6)
-                list(projects, block: block)
+                // Mit Pausenzeile reicht die Höhe nur für zwei Zeilen.
+                list(pomodoro == nil ? projects : quickStartProjects(projects, block: block, maxRows: 2), block: block)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         } else {
             HStack(alignment: .top, spacing: 16) {
                 VStack(alignment: .leading, spacing: 0) {
                     title
+                    if let pomodoro {
+                        PomodoroBreakLine(pomodoro: pomodoro).padding(.top, 2)
+                    }
                     if let budget = entry.budget {
                         BudgetLabel(budget: budget).padding(.top, 2)
                     }

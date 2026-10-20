@@ -16,11 +16,33 @@ final class MenuBarController {
     var isRecordingShortcut = false
     /// Hinweis für die Einstellungen, wenn macOS den Kurzbefehl ablehnt (z. B. schon belegt).
     private(set) var shortcutProblem: String?
+    /// Wie `isRecordingShortcut`, für den Kurzbefehl der Schnelleingabe.
+    var isRecordingQuickEntryShortcut = false
+    /// Hinweis, wenn der Kurzbefehl der Schnelleingabe nicht angemeldet werden konnte.
+    private(set) var quickEntryShortcutProblem: String?
+    /// Helligkeit der Menüleiste; farbige Menüleisten-Bilder färben Text und Glyphe danach.
+    private(set) var menuBarIsDark = MenuBarAppearance.isDark()
 
     @ObservationIgnored private let store: TaktStore
-    @ObservationIgnored private let settings: AppSettings
-    @ObservationIgnored private let hotKey = GlobalHotKey()
+    /// Für `MenuBarLabel` (bekommt in `TaktApp` keine eigenen Einstellungen in die Umgebung).
+    @ObservationIgnored let settings: AppSettings
+    @ObservationIgnored private let hotKey = GlobalHotKey(id: 1)
+    @ObservationIgnored private let quickEntryHotKey = GlobalHotKey(id: 2)
     @ObservationIgnored private let overlay = HotKeyOverlay()
+    @ObservationIgnored private lazy var quickEntryPanel = QuickEntryPanelController(
+        handlers: { [weak self] in
+            guard let self else { return QuickEntryHandlers() }
+            self.store.refresh()
+            return QuickEntryEngine(store: self.store).handlers
+        },
+        shortcut: { [weak self] in
+            guard let self, self.settings.quickEntryHotKeyEnabled else { return nil }
+            return self.quickEntryCombo.display
+        },
+        onSuccess: { [weak self] success in self?.quickEntryDidCommit(success) }
+    )
+    @ObservationIgnored private var appearanceObservations: [NSKeyValueObservation] = []
+    @ObservationIgnored private weak var observedStatusWindow: NSWindow?
     @ObservationIgnored private var clockTask: Task<Void, Never>?
     @ObservationIgnored private var launchObservers: [NSObjectProtocol] = []
     @ObservationIgnored private var didFinishLaunching = false
@@ -30,6 +52,7 @@ final class MenuBarController {
         self.settings = settings
 
         hotKey.action = { [weak self] in self?.toggleTimerFromShortcut() }
+        quickEntryHotKey.action = { [weak self] in self?.toggleQuickEntry() }
         startClock()
 
         let center = NotificationCenter.default
@@ -46,6 +69,7 @@ final class MenuBarController {
                 guard let self else { return }
                 self.didFinishLaunching = true
                 self.observeSettings()
+                self.observeMenuBarAppearance()
             }
         })
         // Nach dem Aufwachen aus dem Ruhezustand stimmt die Minute sonst bis zum nächsten Takt nicht.
@@ -107,6 +131,47 @@ final class MenuBarController {
         overlay.show(message, visibleFor: duration)
     }
 
+    // MARK: Schnelleingabe
+
+    /// Schwebendes Schnelleingabe-Fenster öffnen bzw. (erneuter Kurzbefehl) schließen.
+    func toggleQuickEntry() {
+        quickEntryPanel.toggle()
+    }
+
+    /// Aus dem Menüleisten-Popover: Popover schließen, dann das Fenster öffnen.
+    func showQuickEntry() {
+        closeMenuBarWindow()
+        DispatchQueue.main.async { [weak self] in self?.quickEntryPanel.show() }
+    }
+
+    /// Kurzbefehl der Schnelleingabe für Anzeigen („⌃⌥⌘N“); `nil`, wenn ausgeschaltet.
+    var quickEntryShortcutDisplay: String? {
+        settings.quickEntryHotKeyEnabled ? quickEntryCombo.display : nil
+    }
+
+    private var quickEntryCombo: KeyCombo {
+        KeyCombo(keyCode: settings.quickEntryHotKeyKeyCode,
+                 modifiers: NSEvent.ModifierFlags(rawValue: settings.quickEntryHotKeyModifiers))
+    }
+
+    /// Nach Enter im schwebenden Fenster: kurze Einblendung wie beim Start/Stopp-Kurzbefehl.
+    private func quickEntryDidCommit(_ success: QuickEntrySuccess) {
+        overlay.show(HotKeyOverlayMessage(
+            kind: success.isStart ? .started : .saved,
+            text: success.message,
+            colorHex: success.colorHex
+        ))
+        now = .now
+    }
+
+    /// Das Fenster des `MenuBarExtra` (SwiftUI bietet dafür kein `dismiss`).
+    private func closeMenuBarWindow() {
+        for window in NSApp.windows where window.isVisible
+            && String(describing: type(of: window)).contains("MenuBarExtra") {
+            window.close()
+        }
+    }
+
     // MARK: Fenster
 
     /// Holt das Hauptfenster nach vorn. `openWindow` öffnet es neu, falls es geschlossen wurde.
@@ -164,6 +229,7 @@ final class MenuBarController {
     private func observeSettings() {
         observeContinuously { [weak self] in self?.applyActivationPolicy() }
         observeContinuously { [weak self] in self?.updateHotKey() }
+        observeContinuously { [weak self] in self?.updateQuickEntryHotKey() }
     }
 
     /// Dock-Symbol ausblenden nur zusammen mit der Menüleiste – sonst wäre die App
@@ -189,7 +255,8 @@ final class MenuBarController {
             keyCode: settings.globalShortcutKeyCode,
             modifiers: NSEvent.ModifierFlags(rawValue: settings.globalShortcutModifiers)
         )
-        guard enabled, !isRecordingShortcut else {
+        // Während irgendein Aufnahmefeld Tasten liest, sind beide Kurzbefehle abgemeldet.
+        guard enabled, !isRecordingShortcut, !isRecordingQuickEntryShortcut else {
             hotKey.unregister()
             if !enabled { shortcutProblem = nil }
             return
@@ -199,6 +266,54 @@ final class MenuBarController {
         } else {
             shortcutProblem = "\(combo.display) ist bereits von einer anderen App belegt."
         }
+    }
+
+    private func updateQuickEntryHotKey() {
+        let enabled = settings.quickEntryHotKeyEnabled
+        let combo = quickEntryCombo
+        let startStopActive = settings.globalShortcutEnabled
+        let startStop = KeyCombo(keyCode: settings.globalShortcutKeyCode,
+                                 modifiers: NSEvent.ModifierFlags(rawValue: settings.globalShortcutModifiers))
+        guard enabled, !isRecordingShortcut, !isRecordingQuickEntryShortcut else {
+            quickEntryHotKey.unregister()
+            if !enabled { quickEntryShortcutProblem = nil }
+            return
+        }
+        if startStopActive && combo == startStop {
+            quickEntryHotKey.unregister()
+            quickEntryShortcutProblem = "\(combo.display) ist schon der Kurzbefehl für Start/Stopp."
+        } else if quickEntryHotKey.register(keyCode: combo.keyCode, modifiers: combo.modifiers) {
+            quickEntryShortcutProblem = nil
+        } else {
+            quickEntryShortcutProblem = "\(combo.display) ist bereits von einer anderen App belegt."
+        }
+    }
+
+    // MARK: Erscheinungsbild der Menüleiste
+
+    /// Beobachtet die Helligkeit der Menüleiste (System-Erscheinungsbild und Schreibtischbild).
+    private func observeMenuBarAppearance() {
+        appearanceObservations.append(NSApp.observe(\.effectiveAppearance) { [weak self] _, _ in
+            DispatchQueue.main.async { self?.updateMenuBarAppearance() }
+        })
+        DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name("AppleInterfaceThemeChangedNotification"), object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.updateMenuBarAppearance() }
+        }
+        // Das Fenster der Statusleiste entsteht erst mit dem ersten Label.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.updateMenuBarAppearance() }
+    }
+
+    func updateMenuBarAppearance() {
+        if observedStatusWindow == nil, let window = MenuBarAppearance.statusBarWindow() {
+            observedStatusWindow = window
+            appearanceObservations.append(window.observe(\.effectiveAppearance) { [weak self] _, _ in
+                DispatchQueue.main.async { self?.updateMenuBarAppearance() }
+            })
+        }
+        let dark = MenuBarAppearance.isDark()
+        if dark != menuBarIsDark { menuBarIsDark = dark }
     }
 
     // MARK: Minutentakt

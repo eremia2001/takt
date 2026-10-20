@@ -7,9 +7,10 @@ import TaktCore
 
 // MARK: - Art des Zeitraums
 
-/// Auswahl im Segment „Tag · Woche · Monat · Zeitraum“.
+/// Auswahl im Segment „Tag · Woche · Monat · Jahr · Zeitraum“. Das Jahr gibt es nur in der
+/// Oberfläche (`ReportPeriod` kennt es nicht); `ReportsHeader` führt es als eigene Auswahl.
 enum ReportPeriodKind: String, CaseIterable, Identifiable {
-    case day, week, month, custom
+    case day, week, month, year, custom
 
     var id: Self { self }
 
@@ -18,6 +19,7 @@ enum ReportPeriodKind: String, CaseIterable, Identifiable {
         case .day: "Tag"
         case .week: "Woche"
         case .month: "Monat"
+        case .year: "Jahr"
         case .custom: "Zeitraum"
         }
     }
@@ -40,6 +42,8 @@ enum ReportPeriodKind: String, CaseIterable, Identifiable {
         case .day: return .day(anchor)
         case .week: return .week(anchor)
         case .month: return .month(anchor)
+        // Das Jahr steuert `ReportsHeader` selbst; hier bleibt der bisherige Zeitraum.
+        case .year: return current
         case .custom:
             if case .custom = current { return current }
             return .custom(interval)
@@ -195,6 +199,8 @@ struct ReportsData {
 struct ReportsActions {
     var exportEntries: () -> Void = {}
     var exportSummary: () -> Void = {}
+    /// Reiter „Jahr“: Monatszeilen und Kundentabelle als CSV.
+    var exportYear: () -> Void = {}
     var importToggl: () -> Void = {}
     /// Öffnet „Freie Tage“ für den gewählten Zeitraum.
     var editDaysOff: () -> Void = {}

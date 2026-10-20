@@ -5,6 +5,9 @@ import TaktCore
 /// (Dauer der Karte, Jetzt-Marke) – keine Sekunden.
 struct TodayView: View {
     @Environment(TaktStore.self) private var store
+    @Environment(AppSettings.self) private var settings
+    /// Optional, damit „Heute“ auch ohne Kalender-Anbindung (z. B. Vorschauen) funktioniert.
+    @Environment(CalendarService.self) private var calendarService: CalendarService?
 
     var showProjects: () -> Void = {}
 
@@ -37,6 +40,9 @@ struct TodayView: View {
             presenting: pendingDeletion
         ) { entry in
             Button("Löschen", role: .destructive) {
+                // Gespiegeltes Kalenderereignis zuerst entfernen – die Verknüpfung verschwindet
+                // mit dem Eintrag per CASCADE.
+                calendarService?.willDelete(entryId: entry.id)
                 store.deleteEntry(entry)
             }
             Button("Abbrechen", role: .cancel) {}
@@ -75,6 +81,8 @@ struct TodayView: View {
             planned = TodayData.PlannedItem(project: item(project), startAt: block.startAt, note: block.note)
         }
 
+        let (events, allDay) = calendarEvents(now: now, entries: entries)
+
         return TodayData(
             now: now,
             dayStart: Calendar.current.startOfDay(for: now),
@@ -86,8 +94,38 @@ struct TodayView: View {
             resume: resume,
             runningNextStep: runningNextStep,
             plannedBlock: planned,
-            todayOff: todayOff?.title
+            todayOff: todayOff?.title,
+            events: events,
+            allDayEvents: allDay
         )
+    }
+
+    /// Heutige Termine (mit Uhrzeit bzw. ganztägig) samt Regel-Projekt und „erfasst“-Markierung.
+    /// Leer ohne Schalter „Termine in Heute anzeigen“ oder ohne Kalenderzugriff.
+    private func calendarEvents(
+        now: Date, entries: [TodayData.EntryItem]
+    ) -> (events: [TodayData.EventItem], allDay: [TodayData.EventItem]) {
+        guard settings.calendarShowEvents, let calendarService, calendarService.hasFullAccess else { return ([], []) }
+        // Regeländerungen sollen neu zeichnen; das Matching selbst liest der Store.
+        _ = store.calendarRules
+        var timed: [TodayData.EventItem] = []
+        var allDay: [TodayData.EventItem] = []
+        for info in calendarService.events(on: now) {
+            let project = store.matchCalendarRule(
+                calendarName: info.calendarTitle, title: info.title, attendeeDomains: info.attendeeDomains
+            ).map(item)
+            let captured = !info.isAllDay && entries.contains { entry in
+                guard let end = entry.end else { return false }
+                return abs(entry.start.timeIntervalSince(info.start)) <= 60 && abs(end.timeIntervalSince(info.end)) <= 60
+            }
+            let event = TodayData.EventItem(
+                id: info.id, title: info.title, start: info.start, end: info.end,
+                calendarTitle: info.calendarTitle, calendarColor: info.calendarColor,
+                isAllDay: info.isAllDay, project: project, isCaptured: captured
+            )
+            if info.isAllDay { allDay.append(event) } else { timed.append(event) }
+        }
+        return (timed, allDay)
     }
 
     private func item(_ project: Project) -> TodayData.ProjectItem {
@@ -127,7 +165,26 @@ struct TodayView: View {
             clearPlannedBlock: { store.clearPlannedBlock() },
             planBlock: { projectId, startAt, note in
                 store.planBlock(projectId: projectId, startAt: startAt, note: note)
-            }
+            },
+            captureEvent: captureEvent
+        )
+    }
+
+    /// Termin → Eintrag: Editor vorbelegt mit Zeitraum, Regel-Projekt (sonst leer), Titel als
+    /// Notiz und Tag „Meeting“ als Vorschlag.
+    private func captureEvent(_ event: TodayData.EventItem) {
+        let projectId = event.project?.id ?? store.projects.first?.id
+        guard let projectId else { return }
+        editorDraft = EntryDraft(
+            entry: TimeEntry(
+                projectId: projectId,
+                startedAt: event.start,
+                endedAt: event.end,
+                nextStep: event.title,
+                tag: "Meeting"
+            ),
+            isNew: true,
+            needsProject: event.project == nil
         )
     }
 
