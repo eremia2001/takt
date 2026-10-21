@@ -76,9 +76,22 @@ struct TaktApp: App {
         // Mindestgröße kommt aus dem Inhalt (760 × 520).
         .windowResizability(.contentMinSize)
         .commands {
-            // Takt hat genau ein Hauptfenster; „Neues Fenster“ entfällt.
-            CommandGroup(replacing: .newItem) {}
+            // Menüs Ablage, Darstellung, Timer und Hilfe mit allen Kürzeln; „Neues Fenster“ entfällt
+            // (Takt hat genau ein Hauptfenster), an seiner Stelle stehen Neuer Eintrag/Neues Projekt.
+            AppMenuCommands(store: store, settings: settings, navigator: navigator, menuBar: menuBarController)
         }
+
+        // Hilfe: Themenliste, Suche, Inhalte (offline). Öffnen über ⌘?, Fensterkopf „?“, Palette.
+        Window("Takt-Hilfe", id: HelpCenter.windowID) {
+            HelpScene()
+                .environment(store)
+                .environment(settings)
+                .environment(menuBarController)
+                .environment(calendarService)
+                .environment(navigator)
+        }
+        .defaultSize(width: 900, height: 640)
+        .windowResizability(.contentMinSize)
 
         Settings {
             SettingsView()
@@ -132,6 +145,13 @@ struct TaktApp: App {
 /// Hält die App nach dem Schließen des Fensters am Leben, damit sie weiter auf Starts und
 /// Stopps aus dem Widget reagiert (Musik, Pausenerinnerung).
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// Links „Mehr in der Hilfe →“ (`HelpOpener`) schicken `showHelpWindow:` durch die
+    /// Responder-Kette; der Absender trägt die Themen-Kennung als KVC-Eigenschaft `topic`.
+    @MainActor @objc func showHelpWindow(_ sender: Any?) {
+        let topic = (sender as? NSObject)?.value(forKey: "topic") as? String
+        HelpCenter.shared.show(topicID: topic)
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
     }

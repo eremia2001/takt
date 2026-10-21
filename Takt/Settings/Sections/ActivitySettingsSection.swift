@@ -27,40 +27,56 @@ struct ActivitySettingsSection: View {
                 Text("Takt erkennt an App, Fenster und Git-Repository, woran du arbeitest, und meldet sich, wenn der Timer nicht dazu passt.")
             }
 
-            LabeledContent {
-                if isTrusted {
-                    Label("Freigegeben", systemImage: "checkmark.circle.fill")
-                        .labelStyle(.titleAndIcon)
-                        .foregroundStyle(.secondary)
-                } else {
-                    Button("Freigeben …") { ActivityProbe.requestTrust() }
+            PermissionRow(
+                symbol: "accessibility",
+                title: "Bedienungshilfen",
+                state: isTrusted ? .granted() : .notDetermined("Nicht erlaubt"),
+                purpose: isTrusted
+                    ? "Takt liest Fenstertitel und erkennt darin Git-Repositorys. Es werden keine Eingaben mitgelesen."
+                    : "Nötig, um Fenstertitel und Git-Repositorys zu lesen. Ohne Freigabe erkennt Takt nur die App (z. B. „Xcode“); Regeln „App“ funktionieren trotzdem.",
+                request: { ActivityProbe.requestTrust() },
+                openSettings: {
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+                        NSWorkspace.shared.open(url)
+                    }
                 }
-            } label: {
-                Text("Bedienungshilfen")
-                Text(isTrusted
-                     ? "Takt liest Fenstertitel und erkennt darin Git-Repositorys."
-                     : "Ohne Freigabe erkennt Takt nur die App (z. B. „Xcode“) – keine Fenstertitel und Repositorys. Regeln „App“ funktionieren trotzdem.")
+            )
+            if enabled {
+                NotificationPermissionRow(
+                    purpose: "Für den Vorschlag „Wechseln zu …“, wenn der Timer nicht zur Arbeit passt."
+                )
             }
 
             Stepper(value: $settings.activityMismatchMinutes, in: 1...120) {
-                Text(settings.activityMismatchMinutes == 1
-                     ? "Nachfragen nach 1 Minute"
-                     : "Nachfragen nach \(settings.activityMismatchMinutes) Minuten")
-                Text("So lange muss die Arbeit überwiegend (70 %) zu einem anderen Projekt passen.")
+                Text("Nachfragen nach \(settings.activityMismatchMinutes) Min")
+                    .monospacedDigit()
+                Text("So lange muss die Arbeit überwiegend (70 %) zu einem anderen Projekt passen. Standard: 10 Min")
             }
             .disabled(!enabled)
 
             Toggle(isOn: $settings.activityAutoStartEnabled) {
                 Text("Automatisch starten")
-                Text("Läuft kein Timer, startet Takt das erkannte Projekt selbst und sagt per Mitteilung Bescheid.")
+                Text("Läuft kein Timer, startet Takt das erkannte Projekt selbst und sagt per Mitteilung Bescheid. Sinnvoll, wenn du oft vergisst zu starten.")
             }
             .disabled(!enabled)
         }
 
         Section {
             if store.activityRules.isEmpty {
-                Text("Noch keine Regeln. Ohne Regel ordnet Takt Repositorys mit ähnlichem Namen zu, z. B. „eventbuster-app“ → EventBuster.")
-                    .font(.callout)
+                // Beispielregel als Platzhalter: zeigt, wie eine Zeile aussieht.
+                HStack(spacing: 8) {
+                    Text("Repo-Pfad")
+                    Text("~/dev/kundenportal")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Image(systemName: "arrow.right")
+                        .font(.caption)
+                    Text("Kundenportal")
+                }
+                .foregroundStyle(.tertiary)
+                .help("Beispiel – eigene Regel mit + oben rechts oder „Regel daraus“ unten anlegen")
+                .accessibilityLabel("Beispielregel: Repo-Pfad ~/dev/kundenportal, Projekt Kundenportal")
+                Text("Noch keine Regeln. Ohne Regel ordnet Takt Repositorys mit ähnlichem Namen zu, z. B. „eventbuster-app“ → EventBuster. Eigene Regeln mit + oder „Regel daraus“.")
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
                 let rules = store.activityRules
@@ -97,7 +113,7 @@ struct ActivitySettingsSection: View {
                 }
             }
         } footer: {
-            Text("Es gilt die erste passende Regel von oben.")
+            Text("Eine Regel legt fest, welches Projekt zu einer App, einem Fenstertitel oder einem Ordner gehört. Es gilt die erste passende Regel von oben (▲/▼ ordnet um).")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }
@@ -177,6 +193,7 @@ struct ActivitySettingsSection: View {
 
             Button("Regel daraus") { ruleSource = sample }
                 .controlSize(.small)
+                .help("Legt eine Regel an, damit diese Arbeit künftig einem Projekt zugeordnet wird")
                 .disabled(store.projects.isEmpty)
                 .popover(isPresented: Binding(
                     get: { ruleSource?.id == sample.id },

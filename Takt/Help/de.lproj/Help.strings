@@ -1,0 +1,3 @@
+/* Takt-Hilfe: Die Texte stehen in HelpContent.swift (Deutsch).
+   Diese Datei sorgt nur dafür, dass das App-Bundle die Lokalisierung „de“ führt – sonst zeigt
+   macOS die Standardmenüs (Ablage, Bearbeiten, Darstellung, Fenster, Hilfe) auf Englisch. */

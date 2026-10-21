@@ -83,23 +83,27 @@ struct ReportsScreen: View {
             }
             .scrollIndicators(.automatic)
         } else if let yearData, yearData.year == selectedYear {
-            placeholder(symbol: "chart.bar", text: "Keine Einträge in \(String(selectedYear))")
+            EmptyStateView(
+                symbol: "chart.bar",
+                title: "Keine Einträge in \(String(selectedYear))",
+                message: "Blättere mit ‹ › zu einem anderen Jahr. Einträge entstehen in „Heute“ per Timer oder Schnelleingabe (⌘N) – oder übernimm sie aus Toggl („Toggl importieren …“).",
+                helpTopic: "reports"
+            )
+            .frame(maxHeight: .infinity)
+            .padding(.bottom, 40)
         } else {
             Spacer(minLength: 0)
         }
     }
 
-    private func placeholder(symbol: String, text: String) -> some View {
-        VStack(spacing: 6) {
-            Image(systemName: symbol)
-                .font(.system(size: 22, weight: .regular))
-                .foregroundStyle(theme.tertiary)
-            Text(text)
-                .font(.system(size: 13))
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.bottom, 40)
+    /// Erklärung der Abkürzung „Eff. Satz“ unter der Tabelle.
+    static func legend(theme: DesignTheme) -> some View {
+        Text("Eff. Satz = effektiver Stundensatz: Betrag ÷ gesamte Zeit inkl. nicht abrechenbarer Zeit · Gerundet nach Einstellungen › Abrechnung")
+            .font(.system(size: 11))
+            .foregroundStyle(theme.tertiary)
+            .lineLimit(2)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.top, 2)
     }
 
     private func toast(_ text: String) -> some View {
@@ -124,6 +128,7 @@ struct ReportsScreen: View {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text("Verlauf")
                         .font(.system(size: 13, weight: .semibold))
+                        .help("Erfasste Zeit je Tag in Projektfarben; freie Tage schraffiert. Balken überfahren zeigt Details.")
                     Spacer()
                     focusLine(data)
                 }
@@ -135,8 +140,10 @@ struct ReportsScreen: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Projekte")
                     .font(.system(size: 13, weight: .semibold))
+                TipRow(tip: .reports)
                 ReportsProjectTable(data: data, theme: theme, initiallyExpanded: initiallyExpanded)
                     .id(data.interval)
+                Self.legend(theme: theme)
             }
         }
     }
@@ -150,19 +157,23 @@ struct ReportsScreen: View {
         let freeCount = report.daysOff.count
         return HStack(spacing: 8) {
             Text("\(report.focus.switches) Wechsel")
+                .help(TermHelp.switches)
             Text("·")
             Text("längster Block \(ReportsFormat.duration(report.focus.longestBlock))")
+                .help(TermHelp.longestBlock)
             if !isDay || freeCount > 0 || report.workdays == 0 {
                 Text("·")
                 if isDay, let dayOff = report.daysOff.first {
                     Text("frei: \(dayOff.kind.title)")
                 } else {
                     Text(ReportsFormat.workdays(report.workdays) + (freeCount > 0 ? " (\(freeCount) frei)" : ""))
+                        .help("Arbeitstage: Montag bis Freitag ohne freie Tage (Urlaub, Krank, Feiertag – über „Freie Tage …“)")
                 }
             }
             if !isDay, report.workdays > 0 {
                 Text("·")
                 Text("Ø \(ReportsFormat.duration(report.averagePerWorkday)) pro Arbeitstag")
+                    .help("Erfasste Zeit geteilt durch die Arbeitstage im Zeitraum")
             }
         }
         .font(.system(size: 12, weight: .medium))
@@ -173,10 +184,17 @@ struct ReportsScreen: View {
     }
 
     /// Leerer Zeitraum; ein einzelner freier Tag sagt, warum („Freier Tag · Urlaub“).
+    @ViewBuilder
     private func emptyState(_ data: ReportsData) -> some View {
-        var dayOff: DayOff?
-        if case .day = data.report.period { dayOff = data.report.daysOff.first }
-        return VStack(spacing: 6) {
+        if case .day = data.report.period, let dayOff = data.report.daysOff.first {
+            dayOffState(dayOff)
+        } else {
+            noEntriesState
+        }
+    }
+
+    private func dayOffState(_ dayOff: DayOff?) -> some View {
+        VStack(spacing: 6) {
             Image(systemName: dayOff == nil ? "chart.bar" : "sun.max")
                 .font(.system(size: 22, weight: .regular))
                 .foregroundStyle(theme.tertiary)
@@ -189,12 +207,20 @@ struct ReportsScreen: View {
                         .font(.system(size: 12))
                         .foregroundStyle(theme.tertiary)
                 }
-            } else {
-                Text("Keine Einträge in diesem Zeitraum")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.bottom, 40)
+    }
+
+    /// Leerer Zeitraum ohne freien Tag: erklärt, wie Daten entstehen und wohin man blättert.
+    private var noEntriesState: some View {
+        EmptyStateView(
+            symbol: "chart.bar",
+            title: "Keine Einträge in diesem Zeitraum",
+            message: "Blättere mit ‹ › oder wähle oben Tag, Woche, Monat, Jahr oder einen freien Zeitraum. Einträge entstehen in „Heute“ per Timer oder Schnelleingabe (⌘N) – oder übernimm sie aus Toggl („Toggl importieren …“).",
+            helpTopic: "reports"
+        )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.bottom, 40)
     }

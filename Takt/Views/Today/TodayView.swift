@@ -12,6 +12,8 @@ struct TodayView: View {
     var showProjects: () -> Void = {}
 
     @State private var editorDraft: EntryDraft?
+    /// Projekt-Editor aus dem leeren Zustand („Projekt anlegen“).
+    @State private var projectDraft: ProjectDraft?
     @State private var pendingDeletion: TimeEntry?
     @State private var isDayOffSheetShown = false
     /// Art des freien Tags heute; der Store hält freie Tage nicht vor, daher hier nachgeladen.
@@ -30,6 +32,9 @@ struct TodayView: View {
         .onAppear { reloadTodayOff() }
         .sheet(item: $editorDraft) { draft in
             EntryEditor(draft: draft)
+        }
+        .sheet(item: $projectDraft) { draft in
+            ProjectEditor(draft: draft)
         }
         .sheet(isPresented: $isDayOffSheetShown, onDismiss: { reloadTodayOff() }) {
             DaysOffSheet(month: .now, selected: .now)
@@ -161,6 +166,7 @@ struct TodayView: View {
             deleteEntry: { item in pendingDeletion = entry(id: item.id) },
             addEntry: addEntry,
             showProjects: showProjects,
+            createProject: { projectDraft = ProjectDraft(project: nil) },
             startPlannedBlock: { store.startPlannedBlock() },
             clearPlannedBlock: { store.clearPlannedBlock() },
             planBlock: { projectId, startAt, note in

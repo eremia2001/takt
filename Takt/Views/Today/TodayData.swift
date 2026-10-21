@@ -199,6 +199,8 @@ struct TodayActions {
     var deleteEntry: (TodayData.EntryItem) -> Void = { _ in }
     var addEntry: () -> Void = {}
     var showProjects: () -> Void = {}
+    /// Neues Projekt anlegen (öffnet den Projekt-Editor) – für den leeren Zustand ohne Projekte.
+    var createProject: () -> Void = {}
     /// Startet das Projekt des geplanten Blocks jetzt (der Block ist damit erledigt).
     var startPlannedBlock: () -> Void = {}
     var clearPlannedBlock: () -> Void = {}

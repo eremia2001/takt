@@ -1,7 +1,8 @@
 import SwiftUI
 import TaktCore
 
-/// Abschnitt „Abrechnung“: Rundung, Währung, Standard-Stundensatz, Wochenziel.
+/// Abschnitt „Abrechnung“: Standard-Stundensatz und Wochenziel (häufig), darunter Rundung und
+/// Währung (selten). Jede Einstellung mit Einheit und einem Satz Erklärung.
 struct BillingSettingsSection: View {
     @Environment(AppSettings.self) private var settings
 
@@ -13,16 +14,47 @@ struct BillingSettingsSection: View {
     var body: some View {
         @Bindable var settings = settings
 
-        Section("Abrechnung") {
+        Section {
+            HourlyRateField(
+                title: "Standard-Stundensatz",
+                text: $rateText,
+                currencyCode: settings.currencyCode,
+                prompt: "keiner",
+                hint: "Gilt für alle Projekte ohne eigenen Satz (im Projekt einstellbar). Leer = kein Umsatz für diese Projekte."
+            )
+
+            VStack(alignment: .leading, spacing: 4) {
+                LabeledContent("Wochenziel") {
+                    HStack(spacing: 6) {
+                        TextField("Wochenziel", text: $goalText, prompt: Text("keins"))
+                            .labelsHidden()
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 70)
+                        Text("h pro Woche")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .help("Abrechenbare Stunden, die du pro Woche erreichen willst")
+                Text("Abrechenbare Stunden pro Woche. " + Self.goalHint(goalText))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        } header: {
+            Text("Satz und Ziel")
+        }
+
+        Section {
             VStack(alignment: .leading, spacing: 4) {
                 Picker("Rundung", selection: $settings.rounding) {
                     ForEach(Rounding.allCases, id: \.self) { rounding in
                         Text(rounding.title).tag(rounding)
                     }
                 }
-                Text("Aufgerundet wird jeder Eintrag einzeln, in Berichten und im Export.")
+                Text("Rundet jeden Eintrag einzeln auf, z. B. bei 15 Min: 7 Min → 15 Min. Wirkt auf „Abrechenbar“, Umsatz und Export – die erfasste Zeit bleibt unverändert. Standard: Keine.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             VStack(alignment: .leading, spacing: 4) {
@@ -32,36 +64,18 @@ struct BillingSettingsSection: View {
                         .multilineTextAlignment(.trailing)
                         .frame(width: 70)
                 }
-                if AppSettings.validCurrencyCode(currencyText) == nil {
-                    Text("Drei Buchstaben, z. B. EUR oder CHF.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            HourlyRateField(
-                title: "Standard-Stundensatz",
-                text: $rateText,
-                currencyCode: settings.currencyCode,
-                prompt: "keiner",
-                hint: "Gilt für Projekte ohne eigenen Satz."
-            )
-
-            VStack(alignment: .leading, spacing: 4) {
-                LabeledContent("Wochenziel (abrechenbare Stunden)") {
-                    HStack(spacing: 6) {
-                        TextField("Wochenziel", text: $goalText, prompt: Text("keins"))
-                            .labelsHidden()
-                            .multilineTextAlignment(.trailing)
-                            .frame(width: 70)
-                        Text("h")
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                Text(Self.goalHint(goalText))
+                Text(AppSettings.validCurrencyCode(currencyText) == nil
+                     ? "Bitte drei Buchstaben eingeben, z. B. EUR oder CHF."
+                     : "Drei Buchstaben (ISO-Code) für Beträge in Berichten und Export. Standard: EUR.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+        } header: {
+            Text("Berechnung")
+        } footer: {
+            Text("Ob ein Projekt abrechenbar ist, legst du im Projekt fest (Schalter „Abrechenbar“). Privatprojekte sind es standardmäßig nicht.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
         .onAppear {
             currencyText = settings.currencyCode
@@ -126,7 +140,7 @@ extension BillingSettingsSection {
     static func goalHint(_ text: String) -> String {
         switch parseGoal(text) {
         case .empty:
-            "Leer = kein Ziel. Berichte zeigen in der Woche den Fortschritt."
+            "Leer = kein Ziel. Mit Ziel zeigt der Wochenbericht den Fortschritt."
         case .valid(let hours):
             "Passt sich freien Tagen an: bei 4 Arbeitstagen gelten \(goalText(hours * 4 / 5)) h."
         case .invalid:

@@ -26,11 +26,28 @@ struct ProjectsView: View {
                 OutlinePillButton(title: "Projekt", theme: theme) {
                     editorDraft = ProjectDraft(project: nil)
                 }
-                .help("Neues Projekt anlegen")
+                .help("Neues Projekt anlegen: Name, Farbe, Business/Privat, Stundensatz, Budget, Musik")
             }
             .padding(.horizontal, 28)
 
-            list
+            if store.projects.isEmpty && store.archivedProjects.isEmpty {
+                EmptyStateView(
+                    symbol: "folder.badge.plus",
+                    title: "Noch keine Projekte",
+                    message: "Projekte sind das, worauf du Zeit buchst – ein Kunde, ein Produkt oder etwas Privates. Jedes bekommt eine Farbe und erscheint in „Heute“ als Start-Kapsel.",
+                    actionTitle: "Projekt anlegen",
+                    action: { editorDraft = ProjectDraft(project: nil) },
+                    helpTopic: "billing"
+                )
+                .frame(maxHeight: .infinity)
+                .padding(.bottom, 40)
+            } else {
+                if store.projects.count > 1 {
+                    TipRow(tip: .projects)
+                        .padding(.horizontal, 28)
+                }
+                list
+            }
         }
         .padding(.top, 4)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -64,6 +81,7 @@ struct ProjectsView: View {
                                 Button("Wiederherstellen") { store.unarchive(project) }
                                     .buttonStyle(.borderless)
                                     .font(.system(size: 12, weight: .medium))
+                                    .help("Projekt wieder aktiv machen – es erscheint wieder in „Heute“")
                             }
                             .tag(project.id)
                             .modifier(PlainRow())
@@ -91,10 +109,15 @@ struct ProjectsView: View {
             if let project = project(for: ids) { edit(project) }
         }
         .overlay {
-            if store.projects.isEmpty && store.archivedProjects.isEmpty {
-                Text("Noch keine Projekte")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
+            if store.projects.isEmpty {
+                VStack(spacing: 4) {
+                    Text("Kein aktives Projekt")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    Text("Lege oben rechts ein neues an oder stelle eines aus dem Archiv wieder her.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(theme.tertiary)
+                }
             }
         }
     }
@@ -115,6 +138,7 @@ struct ProjectsView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .help("Archivierte Projekte sind ausgeblendet, ihre Einträge bleiben in den Berichten erhalten")
     }
 
     // MARK: Aktionen
@@ -181,7 +205,7 @@ private struct ProjectRow<Accessory: View>: View {
                         Image(systemName: "music.note")
                             .font(.system(size: 10, weight: .semibold))
                             .foregroundStyle(theme.tertiary)
-                            .help("Mit Musik")
+                            .help("Mit eigener Musik – startet mit dem Timer (Einstellungen › Musik)")
                     }
                 }
                 Text(subtitle)
@@ -203,6 +227,9 @@ private struct ProjectRow<Accessory: View>: View {
             }
         }
         .contentShape(Rectangle())
+        .help(project.isArchived
+              ? "Archiviert · Rechtsklick: Bearbeiten oder Wiederherstellen"
+              : "Doppelklick: bearbeiten · Rechtsklick: Bearbeiten/Archivieren · Ziehen: Reihenfolge ändern")
         .accessibilityElement(children: .combine)
     }
 }
@@ -230,7 +257,7 @@ private struct ProjectTodayTotal: View {
             .monospacedDigit()
             .foregroundStyle(total >= 60 ? AnyShapeStyle(.primary) : AnyShapeStyle(theme.tertiary))
             .frame(width: 44, alignment: .trailing)
-            .help("Heute")
+            .help("Heute erfasst")
             .accessibilityLabel("Heute \(DurationFormat.hourMinute(total))")
     }
 }
@@ -275,7 +302,7 @@ private struct ProjectBudgetGauge: View {
                         .frame(width: 72 * min(1, max(0, fraction)), height: 3)
                 }
         }
-        .help("Budget: \(label) (\(Int((fraction * 100).rounded())) %)")
+        .help("Stundenbudget: \(label) verbraucht (\(Int((fraction * 100).rounded())) %). Ab 80 % orange, über 100 % rot.")
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Budget \(label), \(Int((fraction * 100).rounded())) Prozent")
     }

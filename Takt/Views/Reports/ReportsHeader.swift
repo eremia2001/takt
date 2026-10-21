@@ -268,11 +268,22 @@ struct ReportsKindPicker: View {
                         .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
+                .help(Self.help(kind))
                 .accessibilityAddTraits(isSelected ? .isSelected : [])
             }
         }
         .fixedSize()
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Zeitraum")
+    }
+
+    static func help(_ kind: ReportPeriodKind) -> String {
+        switch kind {
+        case .day: "Bericht für einen Tag"
+        case .week: "Bericht für eine Woche (Mo–So), mit Wochenziel, falls eingestellt"
+        case .month: "Bericht für einen Kalendermonat"
+        case .year: "Jahresübersicht: Monate, Kunden, Tags und Vergleich zum Vorjahr"
+        case .custom: "Freier Zeitraum: Start- und Enddatum selbst wählen"
+        }
     }
 }

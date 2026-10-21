@@ -6,7 +6,8 @@ import TaktCore
 // Inhalt des Menüleisten-Fensters, rein darstellend (Daten als `MenuBarPanelData`, Aktionen als
 // `MenuBarPanelActions`), damit es auch außerhalb der App gezeichnet werden kann.
 // Von oben nach unten: Karte wie das mittlere Widget (läuft: Farbfläche; Pause: neutrale Karte
-// mit Tagessumme), Projektliste zum Starten, Fußzeile „Takt öffnen · Einstellungen… · Beenden“.
+// mit Tagessumme), Projektliste zum Starten („Klick startet“, „Stil ändern…“), einmaliger Tipp zum
+// Menüleisten-Stil, Fußzeile „Takt öffnen · Einstellungen… · Beenden“ – alles mit Tooltips.
 
 struct MenuBarPanelData {
     struct ProjectItem: Identifiable, Equatable {
@@ -66,6 +67,8 @@ struct MenuBarPanel: View {
     var actions = MenuBarPanelActions()
 
     @Environment(\.colorScheme) private var scheme
+    /// Optional: „Stil ändern…“ fordert damit den Reiter „Allgemein“ an, bevor die Einstellungen öffnen.
+    @Environment(AppNavigator.self) private var navigator: AppNavigator?
     private var theme: DesignTheme { DesignTheme(scheme: scheme) }
 
     static let width: CGFloat = 300
@@ -103,7 +106,8 @@ struct MenuBarPanel: View {
             MenuBarProjectList(
                 data: data, theme: theme, start: actions.start,
                 // Ohne Feld führt ein Knopf in der Kopfzeile zum schwebenden Fenster.
-                openQuickEntry: data.showsQuickEntryField ? nil : actions.openQuickEntry
+                openQuickEntry: data.showsQuickEntryField ? nil : actions.openQuickEntry,
+                openStyle: openStyleSettings
             )
             .padding(.top, 10)
 
@@ -114,6 +118,10 @@ struct MenuBarPanel: View {
                     .padding(.bottom, 4)
             }
 
+            TipRow(tip: .menuBar, actionTitle: "Öffnen", action: openStyleSettings, compact: true)
+                .padding(.horizontal, 10)
+                .padding(.bottom, 8)
+
             Rectangle()
                 .fill(theme.hairline)
                 .frame(height: 1)
@@ -121,15 +129,24 @@ struct MenuBarPanel: View {
 
             HStack(spacing: 2) {
                 MenuBarFooterButton(title: "Takt öffnen", theme: theme, action: actions.openApp)
+                    .help("Hauptfenster mit Heute, Berichten und Projekten öffnen")
                 MenuBarFooterButton(title: "Einstellungen…", theme: theme, action: actions.openSettings)
+                    .help("Einstellungen öffnen (⌘,)")
                 Spacer(minLength: 0)
                 MenuBarFooterButton(title: "Beenden", theme: theme, action: actions.quit)
+                    .help("Takt beenden (⌘Q). Ein laufender Timer zählt weiter und ist beim nächsten Start wieder da.")
             }
             .padding(.horizontal, 6)
             .padding(.vertical, 6)
         }
         .frame(width: Self.width)
         .background(theme.window)
+    }
+
+    /// „Stil ändern…“: Reiter „Allgemein“ (Menüleiste) anfordern, dann die Einstellungen öffnen.
+    private func openStyleSettings() {
+        navigator?.request(settingsTab: SettingsTab.general.rawValue)
+        actions.openSettings()
     }
 }
 
@@ -153,6 +170,7 @@ private struct MenuBarRunningCard: View {
                 .monospacedDigit()
                 .foregroundStyle(.white.opacity(0.75))
                 .padding(.top, 1)
+                .help("Beginn des Eintrags · heute insgesamt erfasst")
             Spacer(minLength: 8)
             HStack(alignment: .lastTextBaseline, spacing: 8) {
                 Text(DurationFormat.hourMinute(data.now.timeIntervalSince(running.start)))
@@ -162,6 +180,7 @@ private struct MenuBarRunningCard: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
                     .padding(.bottom, -7)
+                    .help("Laufzeit dieses Eintrags in Stunden:Minuten")
                 Spacer(minLength: 0)
                 Button(action: stop) {
                     HStack(spacing: 7) {
@@ -176,7 +195,7 @@ private struct MenuBarRunningCard: View {
                     .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
-                .help("Timer stoppen")
+                .help("Timer stoppen – ohne Notiz „Nächster Schritt“ (die gibt es beim Stoppen im Hauptfenster)")
             }
         }
         .padding(.horizontal, 16)
@@ -201,6 +220,7 @@ private struct MenuBarIdleCard: View {
             Text("Heute erfasst")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(theme.tertiary)
+                .help("Summe aller heutigen Einträge")
             Text(DurationFormat.hourMinute(data.todayTotal))
                 .font(.system(size: 44, weight: .bold, design: .rounded))
                 .monospacedDigit()
@@ -236,6 +256,7 @@ private struct MenuBarPomodoroRow: View {
                 .foregroundStyle(.secondary)
                 .frame(width: 14)
             Text(item.text)
+                .help("Pomodoro-Phase: Einheit, Art und Restzeit (Einstellungen › Fokus)")
                 .font(.system(size: 11.5, weight: .medium))
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
@@ -254,7 +275,7 @@ private struct MenuBarPomodoroRow: View {
             }
             .buttonStyle(.plain)
             .onHover { isHovered = $0 }
-            .help("Phase überspringen")
+            .help("Phase überspringen – zur nächsten Arbeitseinheit oder Pause")
             .accessibilityLabel("Phase überspringen")
         }
         .padding(.leading, 10)
@@ -272,6 +293,8 @@ private struct MenuBarProjectList: View {
     let theme: DesignTheme
     let start: (UUID) -> Void
     var openQuickEntry: (() -> Void)? = nil
+    /// „Stil ändern…“ – Einstellungen › Allgemein.
+    var openStyle: (() -> Void)? = nil
 
     /// Ab dieser Zahl scrollt die Liste, damit das Fenster nicht über den Bildschirm wächst.
     private static let maxVisibleRows = 9
@@ -279,10 +302,13 @@ private struct MenuBarProjectList: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Projekte")
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                // „Klick startet“ nur, wenn rechts Platz ist (ohne Knopf „Schnelleingabe…“).
+                (Text("Projekte") + Text(data.projects.isEmpty || openQuickEntry != nil ? "" : " · Klick startet")
+                    .foregroundStyle(theme.tertiary.opacity(0.8)))
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(theme.tertiary)
+                    .help("Klick auf ein Projekt startet seinen Timer; ein laufender wird dabei gestoppt.")
                 Spacer(minLength: 8)
                 if let openQuickEntry {
                     Button("Schnelleingabe…", action: openQuickEntry)
@@ -291,14 +317,22 @@ private struct MenuBarProjectList: View {
                         .foregroundStyle(.secondary)
                         .help(data.quickEntryShortcut.map { "Schnelleingabe öffnen (\($0))" } ?? "Schnelleingabe öffnen")
                 }
+                if let openStyle {
+                    Button("Stil ändern…", action: openStyle)
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .help("Aussehen in der Menüleiste ändern: Einstellungen › Allgemein")
+                }
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 2)
 
             if data.projects.isEmpty {
-                Text("Lege in Takt unter „Projekte“ ein erstes Projekt an.")
+                Text("Noch keine Projekte. „Takt öffnen“ › Projekte › „+ Projekt“ – danach startest du hier mit einem Klick.")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 6)
             } else if data.projects.count > Self.maxVisibleRows {
@@ -370,7 +404,7 @@ private struct MenuBarProjectRow: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
-        .help(isRunning ? "\(project.name) läuft" : "\(project.name) starten")
+        .help(isRunning ? "\(project.name) läuft" : "\(project.name) starten – ein laufender Timer wird dabei gestoppt")
         .accessibilityLabel(isRunning ? "\(project.name) läuft" : "\(project.name) starten")
     }
 

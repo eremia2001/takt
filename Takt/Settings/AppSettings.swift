@@ -324,6 +324,18 @@ final class AppSettings {
         didSet { defaults.set(notificationsWeekendQuiet, forKey: Key.notificationsWeekendQuiet) }
     }
 
+    // MARK: Einführung
+
+    /// Einführung (Onboarding) abgeschlossen oder übersprungen.
+    var onboardingCompleted: Bool {
+        didSet { defaults.set(onboardingCompleted, forKey: Key.onboardingCompleted) }
+    }
+    /// Zuletzt gesehener Stand von Einführung bzw. Hinweis „Neu: …“ (`OnboardingInfo.currentVersion`);
+    /// 0 = noch nie gesehen.
+    var onboardingVersion: Int {
+        didSet { defaults.set(onboardingVersion, forKey: Key.onboardingVersion) }
+    }
+
     // MARK: Interna
 
     @ObservationIgnored private let defaults: UserDefaults
@@ -383,6 +395,8 @@ final class AppSettings {
         static let quietHoursStart = "settings.quietHoursStart"
         static let quietHoursEnd = "settings.quietHoursEnd"
         static let notificationsWeekendQuiet = "settings.notificationsWeekendQuiet"
+        static let onboardingCompleted = "settings.onboardingCompleted"
+        static let onboardingVersion = "settings.onboardingVersion"
     }
 
     /// Standard-Kurzbefehl: ⌃⌥⌘T.
@@ -521,6 +535,8 @@ final class AppSettings {
         quietHoursEnd = Self.clamp(defaults.integer(forKey: Key.quietHoursEnd), 0...1439,
                                    fallback: Self.defaultQuietHoursEnd)
         notificationsWeekendQuiet = defaults.bool(forKey: Key.notificationsWeekendQuiet)
+        onboardingCompleted = defaults.bool(forKey: Key.onboardingCompleted)
+        onboardingVersion = max(0, defaults.integer(forKey: Key.onboardingVersion))
 
         // `didSet` greift in `init` nicht: Pausenerinnerung und Wochenziel einmal beim Start für das Widget spiegeln.
         SharedSettings.breakReminderEnabled = breakReminderEnabled && !pomodoroEnabled

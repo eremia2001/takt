@@ -24,14 +24,17 @@ enum AppSection: String, CaseIterable, Identifiable {
     }
 }
 
-/// Fensterkopf: Titel links neben den Ampeln, Tabs und Zahnrad rechts.
+/// Fensterkopf: Titel links neben den Ampeln; rechts Tabs, „⌘K Befehle“, Hilfe „?“ und Zahnrad.
 /// Liegt im (unsichtbaren) Titelleistenbereich; leere Flächen ziehen das Fenster.
+/// Jedes Element hat einen Tooltip mit seinem Kürzel, damit sich die Kürzel einprägen.
 struct WindowHeader: View {
     let title: String
     let selection: AppSection
     let theme: DesignTheme
     var select: (AppSection) -> Void = { _ in }
     var openSettings: () -> Void = {}
+    var openPalette: () -> Void = {}
+    var openHelp: () -> Void = {}
 
     /// Platz links für die Ampeln des Fensters.
     static let trafficLightInset: CGFloat = 84
@@ -59,17 +62,11 @@ struct WindowHeader: View {
                     tab(section)
                 }
             }
-            Button(action: openSettings) {
-                Image(systemName: "gearshape")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 30, height: 26)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .padding(.leading, 6)
-            .help("Einstellungen")
-            .accessibilityLabel("Einstellungen")
+            paletteButton
+                .padding(.leading, 14)
+            iconButton("questionmark.circle", help: "Hilfe (⌘?)", label: "Hilfe", action: openHelp)
+                .padding(.leading, 6)
+            iconButton("gearshape", help: "Einstellungen (⌘,)", label: "Einstellungen", action: openSettings)
         }
         .padding(.trailing, 20)
         .frame(height: Self.rowHeight)
@@ -98,6 +95,47 @@ struct WindowHeader: View {
         }
         .buttonStyle(.plain)
         .keyboardShortcut(section.shortcut, modifiers: .command)
+        .help("\(section.title) (⌘\(String(section.shortcut.character)))")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    /// Dezente Kapsel „⌘K Befehle“ (wie ein Tab) – öffnet die Befehlspalette.
+    private var paletteButton: some View {
+        Button(action: openPalette) {
+            HStack(spacing: 6) {
+                HStack(spacing: 1) {
+                    Image(systemName: "command")
+                        .font(.system(size: 10, weight: .semibold))
+                    Text("K")
+                        .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                }
+                .foregroundStyle(theme.tertiary)
+                Text("Befehle")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 11)
+            .frame(height: 26)
+            // Leiser als der gewählte Tab, damit es nicht wie ein vierter Bereich wirkt.
+            .background(theme.track.opacity(0.5), in: Capsule())
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .help("Befehlspalette (⌘K): alles per Tastatur – Projekte starten, Berichte, Einstellungen, Hilfe")
+        .accessibilityLabel("Befehlspalette öffnen")
+    }
+
+    private func iconButton(_ symbol: String, help: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 30, height: 26)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(help)
+        .accessibilityLabel(label)
     }
 }

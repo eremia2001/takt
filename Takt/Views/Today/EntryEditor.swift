@@ -60,9 +60,20 @@ struct EntryEditor: View {
                     DatePicker("Ende", selection: $endedAt, displayedComponents: [.date, .hourAndMinute])
                 }
 
-                TextField("Nächster Schritt", text: $nextStep, prompt: Text("optional"))
+                VStack(alignment: .leading, spacing: 4) {
+                    TextField("Nächster Schritt", text: $nextStep, prompt: Text("optional"))
+                        .help(TermHelp.nextStep)
+                    Text("Notiz, die beim nächsten Start dieses Projekts angezeigt wird.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
 
-                TextField("Tag", text: $tag, prompt: Text("optional, z. B. Meeting"))
+                VStack(alignment: .leading, spacing: 4) {
+                    TextField("Tag", text: $tag, prompt: Text("optional, z. B. Meeting"))
+                    Text("Ein Stichwort zum Eintrag; Berichte schlüsseln die Projektzeit danach auf.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 // Vorschläge: zuerst Tags dieses Projekts, zuletzt genutzte zuerst; Klick übernimmt.
                 let suggestions = store.tagSuggestions(projectId: projectId ?? draft.entry.projectId, prefix: tag)
                 if !TagSuggestionChips.visible(suggestions, text: tag).isEmpty {

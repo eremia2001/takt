@@ -65,7 +65,7 @@ struct NotificationsSettingsSection: View {
             KindRow(
                 symbol: "gauge.with.dots.needle.67percent", color: .green,
                 title: "Budget",
-                summary: "Hinweis, wenn ein Projekt sein Stundenbudget fast oder ganz verbraucht.",
+                summary: "Hinweis, wenn ein Projekt sein Stundenbudget fast oder ganz verbraucht. Das Budget legst du im Projekt fest.",
                 parameter: "80 % · 100 %",
                 isOn: $settings.budgetWarningsEnabled,
                 details: nil
@@ -73,7 +73,7 @@ struct NotificationsSettingsSection: View {
             KindRow(
                 symbol: "sparkles", color: .purple,
                 title: "Aktivität",
-                summary: "Vorschlag, wenn der Timer nicht zur Arbeit passt. Aus: nur ohne Mitteilung.",
+                summary: "Vorschlag, wenn der Timer nicht zur erkannten Arbeit passt. Aus: Takt erkennt weiter, meldet sich aber nicht.",
                 parameter: settings.activitySuggestionsEnabled
                     ? "nach \(settings.activityMismatchMinutes) Min"
                     : "Erkennung aus",
@@ -83,7 +83,7 @@ struct NotificationsSettingsSection: View {
             KindRow(
                 symbol: "calendar.badge.clock", color: .blue,
                 title: "Geplanter Block",
-                summary: "„Geplant: … um 14:00“ zum Beginn, wenn kein Timer läuft.",
+                summary: "„Geplant: … um 14:00“ zum Beginn, wenn kein Timer läuft. Planen in „Heute“ › Block planen.",
                 parameter: "zum Beginn",
                 isOn: $settings.calendarPlannedBlockNotificationEnabled,
                 details: nil
@@ -111,40 +111,25 @@ struct NotificationsSettingsSection: View {
     @ViewBuilder
     private var systemSection: some View {
         Section {
-            LabeledContent {
-                switch status {
-                case .notDetermined:
-                    Button("Erlauben") {
-                        Task { status = await NotificationPermission.request() }
-                    }
-                    .buttonStyle(.borderedProminent)
-                case .denied:
-                    Button("In Systemeinstellungen öffnen") { NotificationPermission.openSystemSettings() }
-                        .buttonStyle(.borderedProminent)
-                case .allowed:
-                    Button("In Systemeinstellungen öffnen") { NotificationPermission.openSystemSettings() }
-                case nil:
-                    ProgressView().controlSize(.small)
-                }
-            } label: {
-                Label {
-                    Text(statusTitle)
-                    Text(statusDetail)
-                } icon: {
-                    Image(systemName: statusSymbol)
-                        .foregroundStyle(statusColor)
-                }
-            }
+            PermissionRow(
+                symbol: "bell.badge.fill",
+                title: "Mitteilungen",
+                state: Self.permissionState(status),
+                purpose: statusDetail,
+                request: { Task { status = await NotificationPermission.request() } },
+                openSettings: { NotificationPermission.openSystemSettings() }
+            )
 
             LabeledContent {
                 Button("Testmitteilung senden") { sendTest() }
                     .disabled(isSendingTest || status == .denied)
+                    .help("Schickt sofort eine Beispiel-Mitteilung")
             } label: {
                 Text("Kommt alles an?")
                 Text(testDetail)
             }
         } header: {
-            Text("System")
+            Text("Freigabe")
         }
         .task { status = await NotificationPermission.status() }
         // Zurück aus den Systemeinstellungen: Status neu lesen.
@@ -153,12 +138,13 @@ struct NotificationsSettingsSection: View {
         }
     }
 
-    private var statusTitle: String {
+    /// Status für die einheitliche Freigabe-Zeile.
+    static func permissionState(_ status: NotificationPermissionStatus?) -> PermissionState {
         switch status {
-        case .allowed(let showsAlerts): showsAlerts ? "Mitteilungen erlaubt" : "Erlaubt, aber ohne Banner"
-        case .denied: "Mitteilungen verweigert"
-        case .notDetermined: "Noch nicht entschieden"
-        case nil: "Mitteilungen"
+        case .allowed(let showsAlerts): showsAlerts ? .granted() : .limited("Erlaubt, ohne Banner")
+        case .denied: .denied()
+        case .notDetermined: .notDetermined()
+        case nil: .checking
         }
     }
 
@@ -166,30 +152,14 @@ struct NotificationsSettingsSection: View {
         switch status {
         case .allowed(let showsAlerts):
             showsAlerts
-                ? "Takt darf Banner zeigen. Ton und Stil regelt macOS."
-                : "Hinweisstil „Keine“: Mitteilungen landen nur in der Mitteilungszentrale."
+                ? "Für Erinnerungen und Nachfragen, wenn Takt im Hintergrund ist. Ton und Stil regelt macOS."
+                : "Hinweisstil „Keine“: Mitteilungen landen nur in der Mitteilungszentrale – stelle in den Systemeinstellungen „Banner“ ein."
         case .denied:
-            "Erlaube sie in den Systemeinstellungen unter Mitteilungen › Takt."
+            "Ohne Erlaubnis kommen keine Erinnerungen und Nachfragen. Erlauben unter Systemeinstellungen › Mitteilungen › Takt."
         case .notDetermined:
-            "macOS fragt einmal nach. Ohne Erlaubnis kommen keine Erinnerungen und Nachfragen."
+            "Für Erinnerungen und Nachfragen, wenn Takt im Hintergrund ist. macOS fragt einmal nach."
         case nil:
             "Status wird gelesen …"
-        }
-    }
-
-    private var statusSymbol: String {
-        switch status {
-        case .allowed(let showsAlerts): showsAlerts ? "checkmark.circle.fill" : "exclamationmark.circle.fill"
-        case .denied: "xmark.octagon.fill"
-        case .notDetermined, nil: "questionmark.circle.fill"
-        }
-    }
-
-    private var statusColor: Color {
-        switch status {
-        case .allowed(let showsAlerts): showsAlerts ? .green : .orange
-        case .denied: .red
-        case .notDetermined, nil: .orange
         }
     }
 
@@ -224,7 +194,7 @@ struct NotificationsSettingsSection: View {
         Section {
             Toggle(isOn: $settings.notificationsQuietHoursEnabled) {
                 Text("Ruhezeiten")
-                Text("In diesem Zeitraum kommen keine Mitteilungen.")
+                Text("In diesem Zeitraum kommen keine Mitteilungen, z. B. abends.")
             }
             LabeledContent("Zeitraum") {
                 HStack(spacing: 8) {
@@ -325,6 +295,7 @@ private struct KindRow: View {
                         .font(.callout.monospacedDigit())
                         .foregroundStyle(.tertiary)
                         .lineLimit(1)
+                        .help("Aktuelle Einstellung – ändern über „Details →“")
                 }
                 Text(summary)
                     .font(.callout)
@@ -344,6 +315,7 @@ private struct KindRow: View {
             Toggle(title, isOn: $isOn)
                 .labelsHidden()
                 .toggleStyle(.switch)
+                .help(isOn ? "„\(title)“ ausschalten" : "„\(title)“ einschalten")
         }
         .accessibilityElement(children: .contain)
     }
@@ -360,5 +332,31 @@ private struct SubToggleRow: View {
                 .foregroundStyle(.secondary)
         }
         .padding(.leading, 34)
+    }
+}
+
+// MARK: - Freigabe-Zeile für andere Reiter
+
+/// Freigabe „Mitteilungen“ als `PermissionRow`, die ihren Status selbst liest (beim Erscheinen und
+/// wenn Takt wieder aktiv wird, z. B. nach den Systemeinstellungen). Für Reiter wie „Fokus“.
+struct NotificationPermissionRow: View {
+    /// Wofür der Reiter die Freigabe braucht.
+    let purpose: String
+
+    @State private var status: NotificationPermissionStatus?
+
+    var body: some View {
+        PermissionRow(
+            symbol: "bell.badge.fill",
+            title: "Mitteilungen",
+            state: NotificationsSettingsSection.permissionState(status),
+            purpose: purpose,
+            request: { Task { status = await NotificationPermission.request() } },
+            openSettings: { NotificationPermission.openSystemSettings() }
+        )
+        .task { status = await NotificationPermission.status() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            Task { status = await NotificationPermission.status() }
+        }
     }
 }

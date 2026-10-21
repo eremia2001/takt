@@ -91,7 +91,7 @@ struct ReportsProjectTable: View {
     }
 
     /// Tooltip der Spalte „Eff. Satz“.
-    static let effectiveRateHelp = "Betrag ÷ gesamte Zeit inkl. nicht abrechenbar"
+    static let effectiveRateHelp = "Eff. Satz (effektiver Stundensatz): Betrag ÷ gesamte Zeit inkl. nicht abrechenbarer Zeit. Orange: mehr als 15 % unter dem Projektsatz."
 
 
     var body: some View {
@@ -123,12 +123,19 @@ struct ReportsProjectTable: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.leading, 17)
             Text("Art").frame(width: Column.kind, alignment: .leading)
+                .help("Business oder Privat – im Projekt einstellbar")
             Text("Einträge").frame(width: Column.count, alignment: .trailing)
+                .help("Anzahl der Einträge im Zeitraum")
             Text("Dauer").frame(width: Column.duration, alignment: .trailing)
+                .help("Erfasste Zeit, ungerundet")
             Text("Gerundet").frame(width: Column.rounded, alignment: .trailing)
+                .help(TermHelp.rounded)
             Text("Abrechenbar").frame(width: Column.billable, alignment: .trailing)
+                .help(TermHelp.billable)
             Text("Satz").frame(width: Column.rate, alignment: .trailing)
+                .help(TermHelp.rate)
             Text("Betrag \(currencyCode)").frame(width: Column.amount, alignment: .trailing)
+                .help("Abrechenbar × Satz")
             Text("Eff. Satz")
                 .frame(width: Column.effective, alignment: .trailing)
                 .help(Self.effectiveRateHelp)

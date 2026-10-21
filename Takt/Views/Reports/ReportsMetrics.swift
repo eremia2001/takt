@@ -43,13 +43,13 @@ struct ReportsMetrics: View {
 
     private var tiles: some View {
         HStack(alignment: .top, spacing: 12) {
-            tile("Gesamt") {
+            tile("Gesamt", help: "Alle erfasste Zeit im Zeitraum, ungerundet – Business und Privat zusammen.") {
                 bigNumber(ReportsFormat.duration(report.total))
             } caption: {
                 Text(entryCountText)
             }
 
-            tile("Business · Privat") {
+            tile("Business · Privat", help: "Business-Zeit / Privatzeit. Die Art legst du im Projekt fest; der Balken zeigt den Business-Anteil.") {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     bigNumber(ReportsFormat.duration(report.business))
                     Text("/ \(ReportsFormat.duration(report.personal))")
@@ -62,13 +62,13 @@ struct ReportsMetrics: View {
                 splitBar
             }
 
-            tile("Abrechenbar") {
+            tile("Abrechenbar", help: TermHelp.billable) {
                 bigNumber(ReportsFormat.duration(report.roundedBillable))
             } caption: {
                 Text(ReportsFormat.roundingHint(data.rounding))
             }
 
-            tile("Umsatz") {
+            tile("Umsatz", help: "Abrechenbare Stunden × Stundensatz je Projekt (sonst Standard-Stundensatz aus Einstellungen › Abrechnung).") {
                 if data.hasAnyRate {
                     HStack(alignment: .firstTextBaseline, spacing: 5) {
                         bigNumber(ReportsFormat.money(report.amount))
@@ -95,10 +95,11 @@ struct ReportsMetrics: View {
 
     private func tile<Value: View, Caption: View>(
         _ title: String,
+        help: String? = nil,
         @ViewBuilder value: () -> Value,
         @ViewBuilder caption: () -> Caption
     ) -> some View {
-        ReportsTile(title: title, theme: theme, value: value, caption: caption)
+        ReportsTile(title: title, theme: theme, help: help, value: value, caption: caption)
     }
 
     private func bigNumber(_ text: String, dimmed: Bool = false) -> some View {
@@ -200,6 +201,7 @@ struct ReportsGoalRow: View {
         .frame(height: 36)
         .background(theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(theme.hairline, lineWidth: 1))
+        .help(TermHelp.weeklyGoal)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Wochenziel \(ReportsFormat.duration(goal.achieved)) von \(ReportsFormat.duration(goal.adjustedTarget)), \(ReportsFormat.percent(goal.fraction))")
     }
@@ -210,12 +212,16 @@ struct ReportsGoalRow: View {
 struct ReportsTile<Value: View, Caption: View>: View {
     let title: String
     let theme: DesignTheme
+    /// Tooltip: was die Kennzahl bedeutet.
+    var help: String?
     let value: Value
     let caption: Caption
 
-    init(title: String, theme: DesignTheme, @ViewBuilder value: () -> Value, @ViewBuilder caption: () -> Caption) {
+    init(title: String, theme: DesignTheme, help: String? = nil,
+         @ViewBuilder value: () -> Value, @ViewBuilder caption: () -> Caption) {
         self.title = title
         self.theme = theme
+        self.help = help
         self.value = value()
         self.caption = caption()
     }
@@ -242,6 +248,7 @@ struct ReportsTile<Value: View, Caption: View>: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(theme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(theme.hairline, lineWidth: 1))
+        .help(help ?? "")
         .accessibilityElement(children: .combine)
     }
 }
@@ -281,7 +288,8 @@ struct ReportsRateTile: View {
     let theme: DesignTheme
 
     static let help = "Effektiver Satz: Betrag ÷ gesamte Business-Zeit inkl. nicht abrechenbarer Zeit "
-        + "(Privatzeit ausgenommen). Nominal: Betrag ÷ abgerechnete Stunden."
+        + "(Privatzeit ausgenommen) – was eine Stunde Arbeit tatsächlich einbringt. "
+        + "Nominal: Betrag ÷ abgerechnete Stunden. Orange: mehr als 15 % unter nominal."
 
     /// Ab dieser Breite der Kennzahlen-Reihe passt die Kachel als fünfte daneben; darunter wird
     /// sie zur schmalen Zeile (`row`), damit die anderen Zahlen nicht abgeschnitten werden.

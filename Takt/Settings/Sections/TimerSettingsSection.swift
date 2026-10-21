@@ -8,17 +8,19 @@ struct TimerSettingsSection: View {
     var body: some View {
         @Bindable var settings = settings
 
-        Section("Timer") {
+        Section {
             Toggle(isOn: $settings.forgottenTimerEnabled) {
                 Text("Bei vergessenem Timer nachfragen")
-                Text("Kommt auch in Ruhezeiten (Einstellungen › Mitteilungen).")
+                Text("Läuft ein Timer ungewöhnlich lange, fragt Takt, ob er wirklich noch läuft – mit „Jetzt stoppen“ oder „Stoppen um …“. Kommt auch in Ruhezeiten.")
             }
             Stepper(value: $settings.forgottenTimerHours, in: 1...24) {
-                Text(settings.forgottenTimerHours == 1
-                     ? "Nach 1 Stunde nachfragen"
-                     : "Nach \(settings.forgottenTimerHours) Stunden nachfragen")
+                Text("Nachfragen nach \(settings.forgottenTimerHours) h")
+                    .monospacedDigit()
+                Text("Standard: 8 h · 1 bis 24 h")
             }
             .disabled(!settings.forgottenTimerEnabled)
+        } header: {
+            Text("Vergessener Timer")
         }
     }
 }

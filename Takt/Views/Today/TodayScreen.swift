@@ -24,11 +24,25 @@ struct TodayScreen: View {
     private var theme: DesignTheme { DesignTheme(scheme: scheme) }
 
     var body: some View {
+        Group {
+            if data.projects.isEmpty && data.entries.isEmpty {
+                TodayFirstRun(theme: theme, actions: actions)
+            } else {
+                content
+            }
+        }
+        .padding(.horizontal, Self.sideInset)
+        .padding(.top, 4)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 10) {
                 TodayStartRow(data: data, theme: theme, actions: actions)
                 if !data.projects.isEmpty {
                     TodayQuickEntry(theme: theme, actions: actions, initialText: initialQuickText)
+                    TipRow(tip: .today)
                 }
             }
             if let running = data.running {
@@ -52,13 +66,40 @@ struct TodayScreen: View {
             }
             TodayEntryList(data: data, theme: theme, actions: actions)
         }
-        .padding(.horizontal, Self.sideInset)
-        .padding(.top, 4)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     /// Seitlicher Rand des Inhalts.
     static let sideInset: CGFloat = 28
+}
+
+// MARK: - Erster Start
+
+/// Leerer Zustand ohne Projekte und Einträge: erklärt in drei Schritten, wie Takt funktioniert,
+/// und legt mit einem Klick das erste Projekt an.
+private struct TodayFirstRun: View {
+    let theme: DesignTheme
+    let actions: TodayActions
+
+    var body: some View {
+        EmptyStateView(
+            symbol: "folder.badge.plus",
+            title: "Noch keine Projekte",
+            message: "Ein Projekt ist das, worauf du Zeit buchst – ein Kunde, ein Produkt oder etwas Privates wie „Garten“.",
+            steps: [
+                "Projekt anlegen: Name, Farbe, Business oder Privat.",
+                "Oben auf die Projekt-Kapsel klicken – der Timer läuft.",
+                "„Stoppen“ (⌘.) beendet ihn. Vergessenes trägst du mit ⌘N nach, z. B. „Kundenportal 9-10:30“.",
+            ],
+            actionTitle: "Projekt anlegen",
+            action: actions.createProject,
+            helpTopic: "start"
+        )
+        .padding(.vertical, 36)
+        .padding(.horizontal, 24)
+        .background(theme.surface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(theme.hairline, lineWidth: 1))
+        .padding(.top, 8)
+    }
 }
 
 // MARK: - Start-Kapseln
@@ -74,13 +115,15 @@ private struct TodayStartRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             if data.projects.isEmpty {
-                Button(action: actions.showProjects) {
-                    Text("Lege unter „Projekte“ ein erstes Projekt an.")
+                // Nur archivierte Projekte: Einträge sind da, aber nichts zum Starten.
+                HStack(spacing: 10) {
+                    Text("Kein aktives Projekt zum Starten.")
                         .font(.system(size: 13))
                         .foregroundStyle(.secondary)
-                        .frame(height: 28)
+                    OutlinePillButton(title: "Projekt anlegen", theme: theme, action: actions.createProject)
+                        .help("Neues Projekt anlegen – danach erscheint es hier als Start-Kapsel")
                 }
-                .buttonStyle(.plain)
+                .frame(height: 28)
             } else {
                 // Bricht bei vielen Projekten in die nächste Zeile um.
                 FlowLayout(spacing: 6, lineSpacing: 8) {
@@ -103,7 +146,7 @@ private struct TodayStartRow: View {
             }
             Spacer(minLength: 0)
             OutlinePillButton(title: "Eintrag", theme: theme, action: actions.addEntry)
-                .help("Eintrag manuell hinzufügen")
+                .help("Eintrag nachtragen: Projekt und Zeitraum von Hand eingeben (schneller: ⌘N)")
                 .disabled(data.projects.isEmpty)
         }
     }
@@ -114,6 +157,7 @@ private struct TodayStartRow: View {
             .foregroundStyle(theme.tertiary)
             .padding(.trailing, 4)
             .frame(height: 28)
+            .help("\(title)-Projekte – klick auf eine Kapsel startet den Timer. Die Art legst du im Projekt fest.")
     }
 
     private func pill(_ project: TodayData.ProjectItem) -> some View {
@@ -156,7 +200,9 @@ private struct TodayStartPill: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .help(isRunning ? "\(project.name) läuft" : "\(project.name) starten")
+        .help(isRunning
+              ? "\(project.name) läuft – stoppen mit „Stoppen“ (⌘.)"
+              : "\(project.name) starten – ein laufender Timer wird dabei gestoppt")
         .accessibilityLabel(isRunning ? "\(project.name) läuft" : "\(project.name) starten")
     }
 }
@@ -185,6 +231,7 @@ private struct TodayRunningCard: View {
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.white.opacity(0.75))
                     .padding(.top, 2)
+                    .help("Beginn · Art des Projekts · Tag des Eintrags")
                 Spacer(minLength: 0)
                 Text(TodayFormat.duration(running.duration(now: data.now)))
                     .font(.system(size: 92, weight: .bold, design: .rounded))
@@ -193,6 +240,7 @@ private struct TodayRunningCard: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
                     .padding(.bottom, -14)
+                    .help("Laufzeit dieses Eintrags in Stunden:Minuten")
             }
             .layoutPriority(1)
             Spacer(minLength: 16)
@@ -203,6 +251,7 @@ private struct TodayRunningCard: View {
                         Text("Nächster Schritt")
                             .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(.white.opacity(0.65))
+                            .help(TermHelp.nextStep)
                         Text(step)
                             .font(.system(size: 13))
                             .foregroundStyle(.white)
@@ -250,12 +299,20 @@ private struct TodayRunningCard: View {
 
     private var stopPopover: some View {
         VStack(alignment: .leading, spacing: 12) {
-            TextField("Nächster Schritt (optional)", text: $nextStep)
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 280)
-                .onSubmit(stop)
+            VStack(alignment: .leading, spacing: 4) {
+                TextField("Nächster Schritt (optional)", text: $nextStep)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 280)
+                    .onSubmit(stop)
+                Text("Erscheint beim nächsten Start von \(running.project.name) – damit du weißt, wo du weitermachst.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 280, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             VStack(alignment: .leading, spacing: 6) {
                 TextField("Tag (optional, z. B. Meeting)", text: $tag)
+                    .help("Ein Stichwort zum Eintrag; Berichte schlüsseln die Zeit danach auf")
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 280)
                     .onSubmit(stop)
@@ -297,11 +354,13 @@ private struct TodayIdleCard: View {
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(theme.tertiary)
                         .padding(.top, 2)
+                        .help("Zeit seit dem letzten Stopp heute")
                 }
                 Spacer(minLength: 0)
                 Text("Heute erfasst")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(theme.tertiary)
+                    .help("Summe aller heutigen Einträge in Stunden:Minuten")
                 Text(TodayFormat.duration(data.todayTotal))
                     .font(.system(size: 76, weight: .bold, design: .rounded))
                     .monospacedDigit()
@@ -319,6 +378,7 @@ private struct TodayIdleCard: View {
                             Text("Nächster Schritt")
                                 .font(.system(size: 11, weight: .medium))
                                 .foregroundStyle(theme.tertiary)
+                                .help(TermHelp.nextStep)
                             Text(step)
                                 .font(.system(size: 13))
                                 .foregroundStyle(.primary)
@@ -342,7 +402,7 @@ private struct TodayIdleCard: View {
                         .contentShape(Capsule())
                     }
                     .buttonStyle(.plain)
-                    .help("\(resume.project.name) starten")
+                    .help("Weiter mit: startet \(resume.project.name) erneut – das zuletzt genutzte Projekt")
                 }
             }
         }
@@ -393,6 +453,7 @@ private struct TodayNextBlockRow: View {
             Text("Nächster Block")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(theme.tertiary)
+                .help(TermHelp.planBlock)
             if let block = data.plannedBlock {
                 planned(block)
             } else {
@@ -411,7 +472,7 @@ private struct TodayNextBlockRow: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(data.projects.isEmpty)
-                .help("Den nächsten Arbeitsblock vormerken")
+                .help(TermHelp.planBlock)
                 .popover(isPresented: $isPlanning, arrowEdge: .bottom) { popover }
             }
             Spacer(minLength: 0)
@@ -447,7 +508,7 @@ private struct TodayNextBlockRow: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help("Geplanten Block ändern")
+            .help(isDue ? "Fällig: der geplante Beginn ist erreicht. Klicken zum Ändern." : "Geplanten Block ändern")
             .popover(isPresented: $isPlanning, arrowEdge: .bottom) { popover }
 
             if !isRunning {
@@ -531,8 +592,14 @@ private struct TodayPlanBlockPopover: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(data.plannedBlock == nil ? "Block planen" : "Block ändern")
-                .font(.system(size: 13, weight: .semibold))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(data.plannedBlock == nil ? "Block planen" : "Block ändern")
+                    .font(.system(size: 13, weight: .semibold))
+                Text("Wenn es so weit ist, dann geht es damit weiter: Takt erinnert zum Beginn, ein Klick startet den Timer.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 10) {
                 GridRow {
                     Text("Projekt").foregroundStyle(.secondary)
@@ -603,6 +670,7 @@ private struct TodayDayStrip: View {
                 // Läuft: Tagessumme hier. Pause: steht groß in der Karte, hier nur der Titel.
                 Text(data.running == nil ? "Tagesverlauf" : "Heute")
                     .font(.system(size: 13, weight: .semibold))
+                    .help("Farbige Abschnitte sind deine Einträge, der senkrechte Strich ist jetzt.")
                 if data.running != nil {
                     Text(TodayFormat.duration(data.todayTotal))
                         .font(.system(size: 13, weight: .semibold, design: .rounded))
@@ -613,8 +681,10 @@ private struct TodayDayStrip: View {
                 if !data.entries.isEmpty {
                     HStack(spacing: 8) {
                         Text("\(data.switches) Wechsel")
+                            .help(TermHelp.switches)
                         Text("·")
                         Text("längster Block \(TodayFormat.duration(data.longestBlock))")
+                            .help(TermHelp.longestBlock)
                     }
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(theme.tertiary)
@@ -721,11 +791,17 @@ private struct TodayEntryList: View {
 
     var body: some View {
         if data.entries.isEmpty {
-            Text("Heute noch keine Einträge")
-                .font(.system(size: 13))
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .center)
-                .padding(.top, 12)
+            VStack(spacing: 4) {
+                Text("Heute noch keine Einträge")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Text("Starte einen Timer über eine Kapsel oben oder tippe ⌘N: „Kundenportal 9-10:30“.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(theme.tertiary)
+                    .multilineTextAlignment(.center)
+            }
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.top, 12)
         } else {
             // Passt die Liste, ohne Rollen; sonst rollt sie mit der Rollleiste am Fensterrand.
             ViewThatFits(in: .vertical) {
@@ -752,6 +828,7 @@ private struct TodayEntryList: View {
                 }
                 Button { actions.openEntry(entry) } label: { row(entry) }
                     .buttonStyle(.plain)
+                    .help("Klicken zum Bearbeiten · Rechtsklick zum Löschen")
                     .contextMenu {
                         Button("Bearbeiten …") { actions.openEntry(entry) }
                         Divider()

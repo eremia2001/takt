@@ -30,19 +30,28 @@ private struct CalendarSettingsContent: View {
 
     var body: some View {
         @Bindable var settings = settings
-        Section("Kalender") {
-            LabeledContent {
-                accessButton
-            } label: {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Zugriff auf Kalender")
-                    Text(service.statusText)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+        Section {
+            PermissionRow(
+                symbol: "calendar",
+                title: "Kalender",
+                state: accessState,
+                purpose: "Damit Takt Termine in „Heute“ zeigen und erfasste Zeiten in einen eigenen Kalender „Takt“ eintragen kann. Takt ändert keine anderen Kalender.",
+                request: isRequesting ? nil : {
+                    isRequesting = true
+                    Task {
+                        await service.requestAccess()
+                        isRequesting = false
+                    }
+                },
+                openSettings: { service.openPrivacySettings() }
+            )
+            Toggle(isOn: $settings.calendarShowEvents) {
+                Text("Termine in „Heute“ anzeigen")
+                Text("Zeigt heutige Termine als Spur über der Tagesleiste und als Liste – mit „Als Eintrag“, um einen Termin als Zeit zu übernehmen.")
             }
-            Toggle("Termine in „Heute“ anzeigen", isOn: $settings.calendarShowEvents)
-                .disabled(!service.hasFullAccess)
+            .disabled(!service.hasFullAccess)
+        } header: {
+            Text("Zugriff")
         }
 
         if service.hasFullAccess {
@@ -53,33 +62,33 @@ private struct CalendarSettingsContent: View {
             } header: {
                 Text("Regeln Termin → Projekt")
             } footer: {
-                Text("Die erste passende Regel bestimmt das Projekt beim Übernehmen eines Termins. Reihenfolge per Ziehen am Griff.")
+                Text("Eine Regel ordnet Termine einem Projekt zu, etwa für „Als Eintrag“ und den Hinweis „Termin läuft“. Es gilt die erste passende Regel von oben; Reihenfolge per Ziehen am Griff ≡.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+        } else {
+            Section {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Mit Zugriff kannst du hier:")
+                        .font(.callout.weight(.medium))
+                    Label("Termine in „Heute“ sehen und mit einem Klick als Eintrag übernehmen", systemImage: "calendar.day.timeline.left")
+                    Label("Erfasste Zeiten automatisch in einen Kalender „Takt“ eintragen", systemImage: "arrow.triangle.2.circlepath")
+                    Label("Termine per Regel Projekten zuordnen, z. B. Titel enthält „Gerlach“ → Kundenportal", systemImage: "arrow.right.circle")
+                }
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .padding(.vertical, 2)
+            } header: {
+                Text("Noch kein Zugriff")
             }
         }
     }
 
-    // MARK: Zugriff
-
-    @ViewBuilder
-    private var accessButton: some View {
-        if service.hasFullAccess {
-            Image(systemName: "checkmark.circle.fill")
-                .foregroundStyle(.green)
-                .accessibilityLabel("Zugriff erlaubt")
-        } else if service.canRequestAccess {
-            Button("Zugriff erlauben") {
-                isRequesting = true
-                Task {
-                    await service.requestAccess()
-                    isRequesting = false
-                }
-            }
-            .disabled(isRequesting)
-        } else {
-            Button("Systemeinstellungen …") { service.openPrivacySettings() }
-        }
+    /// Kalender-Zugriff als einheitlicher Freigabe-Status.
+    private var accessState: PermissionState {
+        if service.hasFullAccess { return .granted() }
+        if service.canRequestAccess { return isRequesting ? .checking : .notDetermined() }
+        return .denied(service.statusText.components(separatedBy: " – ").first ?? "Abgelehnt")
     }
 
     // MARK: Sichtbare Kalender
@@ -109,7 +118,7 @@ private struct CalendarSettingsContent: View {
         } header: {
             Text("Angezeigte Kalender")
         } footer: {
-            Text("Der Kalender „Takt“ erscheint nie in „Heute“ – er enthält deine Einträge selbst.")
+            Text("Nur angehakte Kalender erscheinen in „Heute“. Der Kalender „Takt“ fehlt hier bewusst – er enthält deine Einträge selbst.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -122,33 +131,40 @@ private struct CalendarSettingsContent: View {
             Toggle(isOn: mirrorBinding) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Erfasste Zeiten in den Kalender „Takt“ eintragen")
-                    Text("Ein Ereignis je Eintrag der letzten 30 Tage: Projekt (· #Tag), Notiz = Nächster Schritt.")
+                    Text("Legt einen eigenen Kalender „Takt“ an, mit einem Ereignis je Eintrag der letzten 30 Tage – so siehst du deine Zeiten auch in der Kalender-App. Andere Kalender bleiben unberührt.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }
-            Picker("Quelle", selection: sourceBinding) {
+            Picker(selection: sourceBinding) {
                 if service.mirrorSourceID == nil {
                     Text("Bitte wählen").tag(String?.none)
                 }
                 ForEach(service.mirrorSources) { source in
                     Text(source.label).tag(String?.some(source.id))
                 }
+            } label: {
+                Text("Konto")
+                Text("Wo der Kalender „Takt“ liegt, z. B. iCloud (dann auch auf dem iPhone) oder „Auf meinem Mac“.")
             }
             .disabled(service.mirrorSources.isEmpty)
-            LabeledContent("Mindestdauer") {
+            LabeledContent {
                 Stepper {
-                    Text("\(settings.calendarMirrorMinimumMinutes) min")
+                    Text("\(settings.calendarMirrorMinimumMinutes) Min")
                         .monospacedDigit()
                 } onIncrement: {
                     settings.calendarMirrorMinimumMinutes = Self.minimumSteps.first { $0 > settings.calendarMirrorMinimumMinutes } ?? 240
                 } onDecrement: {
                     settings.calendarMirrorMinimumMinutes = Self.minimumSteps.last { $0 < settings.calendarMirrorMinimumMinutes } ?? 1
                 }
+            } label: {
+                Text("Mindestdauer")
+                Text("Kürzere Einträge werden nicht eingetragen. Standard: 5 Min")
             }
             LabeledContent {
                 Button("Jetzt spiegeln") { service.mirrorNow() }
                     .disabled(!settings.calendarMirrorEnabled || service.mirrorCalendar == nil)
+                    .help("Gleicht den Kalender „Takt“ sofort ab – sonst geschieht das nach jeder Änderung und alle 30 Minuten von selbst")
             } label: {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(countText)
@@ -229,7 +245,24 @@ private struct CalendarRuleList: View {
 
     var body: some View {
         if store.calendarRules.isEmpty {
-            Text("Noch keine Regeln. Beispiel: Titel enthält „Gerlach“ → Kundenportal.")
+            // Beispielregel als Platzhalter: zeigt, wie eine Zeile aussieht.
+            HStack(spacing: 8) {
+                Image(systemName: "line.3.horizontal")
+                    .frame(width: 14)
+                Text("Titel enthält")
+                    .frame(width: 118, alignment: .leading)
+                Text("„Gerlach“")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Image(systemName: "arrow.right")
+                    .font(.caption)
+                Text("Kundenportal")
+                    .frame(width: 112, alignment: .leading)
+            }
+            .foregroundStyle(.tertiary)
+            .help("Beispiel – lege unten eine eigene Regel an")
+            .accessibilityLabel("Beispielregel: Titel enthält Gerlach, Projekt Kundenportal")
+            Text("Noch keine Regeln. So sähe eine aus – unten Art, Muster und Projekt wählen und + klicken.")
+                .font(.caption)
                 .foregroundStyle(.secondary)
         }
         ForEach(store.calendarRules) { rule in

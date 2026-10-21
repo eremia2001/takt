@@ -76,23 +76,37 @@ struct ProjectEditor: View {
                     }
                 }
 
-                Picker("Art", selection: $isBusiness) {
-                    Text("Business").tag(true)
-                    Text("Privat").tag(false)
-                }
-                .pickerStyle(.segmented)
-                .onChange(of: isBusiness) {
-                    if billableFollowsKind { isBillable = isBusiness }
+                VStack(alignment: .leading, spacing: 4) {
+                    Picker("Art", selection: $isBusiness) {
+                        Text("Business").tag(true)
+                        Text("Privat").tag(false)
+                    }
+                    .pickerStyle(.segmented)
+                    .onChange(of: isBusiness) {
+                        if billableFollowsKind { isBillable = isBusiness }
+                    }
+                    Text("Trennt Arbeit und Privates in Berichten und in „Heute“. Privatprojekte sind standardmäßig nicht abrechenbar.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
-                TextField("Kunde", text: $client, prompt: Text("optional"))
+                VStack(alignment: .leading, spacing: 4) {
+                    TextField("Kunde", text: $client, prompt: Text("optional"))
+                    Text("Fasst Projekte eines Kunden im Jahresbericht zusammen; das Timesheet-PDF lässt sich je Kunde erstellen.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
 
                 HourlyRateField(
                     title: "Stundensatz",
                     text: $rateText,
                     currencyCode: settings.currencyCode,
                     prompt: ratePrompt,
-                    hint: rateText.isEmpty && settings.defaultHourlyRate != nil ? "Leer = Standard-Stundensatz." : nil
+                    hint: rateText.isEmpty
+                        ? (settings.defaultHourlyRate != nil
+                           ? "Leer = Standard-Stundensatz aus Einstellungen › Abrechnung."
+                           : "Für den Umsatz in Berichten. Leer = kein Satz.")
+                        : nil
                 )
 
                 VStack(alignment: .leading, spacing: 4) {
@@ -111,22 +125,34 @@ struct ProjectEditor: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     } else if !budgetText.isEmpty {
-                        Text("Gezählt wird alle erfasste Zeit des Projekts.")
+                        Text("Gezählt wird alle erfasste Zeit des Projekts. Ab 80 % und bei 100 % kommt ein Hinweis.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("Stunden, die für das Projekt vereinbart sind, z. B. 40. Leer = kein Budget.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                 }
 
-                Toggle("Abrechenbar", isOn: Binding(
+                Toggle(isOn: Binding(
                     get: { isBillable },
                     set: { newValue in
                         isBillable = newValue
                         billableFollowsKind = false
                     }
-                ))
+                )) {
+                    Text("Abrechenbar")
+                    Text("Zeit zählt zu „Abrechenbar“ und zum Umsatz in Berichten. Folgt der Art (Business = ja), bis du ihn selbst umstellst.")
+                }
 
                 VStack(alignment: .leading, spacing: 4) {
                     TextField("Musik", text: $playlist, prompt: Text("Link oder Playlist-Name, optional"))
+                    if playlist.isEmpty {
+                        Text("Startet mit dem Timer dieses Projekts. Leer = Standard-Quelle aus Einstellungen › Musik.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                     musicHint
                 }
 

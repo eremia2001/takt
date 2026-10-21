@@ -19,31 +19,63 @@ struct SettingsView: View {
     var body: some View {
         TabView(selection: $selection) {
             Tab("Allgemein", systemImage: "gearshape", value: SettingsTab.general) {
-                SettingsPage {
+                SettingsPage(
+                    symbol: "gearshape",
+                    intro: "Hier stellst du ein, wie Takt in der Menüleiste erscheint, welche Kurzbefehle überall gelten und wann Takt bei einem vergessenen Timer nachfragt.",
+                    helpTopic: "menubar"
+                ) {
                     GeneralSettingsSection()
                     TimerSettingsSection()
                 }
             }
             Tab("Mitteilungen", systemImage: "bell.badge", value: SettingsTab.notifications) {
-                SettingsPage { NotificationsSettingsSection() }
+                SettingsPage(
+                    symbol: "bell.badge",
+                    intro: "Hier siehst du alle Hinweise, die Takt schicken kann, schaltest sie einzeln ein oder aus und legst Ruhezeiten fest.",
+                    helpTopic: "notifications"
+                ) { NotificationsSettingsSection() }
             }
             Tab("Musik", systemImage: "music.note", value: SettingsTab.music) {
-                SettingsPage { MusicSettingsSection() }
+                SettingsPage(
+                    symbol: "music.note",
+                    intro: "Hier stellst du ein, ob Takt beim Starten eines Timers Musik abspielt und beim Stoppen pausiert. Die Musik je Projekt legst du im Projekt fest.",
+                    helpTopic: "music"
+                ) { MusicSettingsSection() }
             }
-            Tab("Fokus", systemImage: "cup.and.saucer", value: SettingsTab.focus) {
-                SettingsPage { FocusSettingsSection() }
+            Tab("Fokus", systemImage: "brain.head.profile", value: SettingsTab.focus) {
+                SettingsPage(
+                    symbol: "brain.head.profile",
+                    intro: "Hier stellst du ein, wann Takt an Pausen erinnert, was nach einer Abwesenheit mit der Zeit passiert und ob du im Pomodoro-Rhythmus arbeitest.",
+                    helpTopic: "focus"
+                ) { FocusSettingsSection() }
             }
-            Tab("Widget", systemImage: "square.text.square", value: SettingsTab.widget) {
-                SettingsPage { WidgetSettingsSection() }
+            Tab("Widget", systemImage: "rectangle.3.group", value: SettingsTab.widget) {
+                SettingsPage(
+                    symbol: "rectangle.3.group",
+                    intro: "Hier stellst du ein, wie das Takt-Widget auf dem Schreibtisch und in der Mitteilungszentrale aussieht.",
+                    helpTopic: "widget"
+                ) { WidgetSettingsSection() }
             }
             Tab("Abrechnung", systemImage: "eurosign.circle", value: SettingsTab.billing) {
-                SettingsPage { BillingSettingsSection() }
+                SettingsPage(
+                    symbol: "eurosign.circle",
+                    intro: "Hier stellst du Stundensatz, Wochenziel, Rundung und Währung ein. Sie wirken auf Berichte, Umsatz und Export – nicht auf die erfasste Zeit.",
+                    helpTopic: "billing"
+                ) { BillingSettingsSection() }
             }
             Tab("Kalender", systemImage: "calendar", value: SettingsTab.calendar) {
-                SettingsPage { CalendarSettingsSection() }
+                SettingsPage(
+                    symbol: "calendar",
+                    intro: "Hier verbindest du Takt mit deinen Kalendern: Termine in „Heute“ zeigen, erfasste Zeiten in einen eigenen Kalender eintragen und Termine Projekten zuordnen.",
+                    helpTopic: "calendar"
+                ) { CalendarSettingsSection() }
             }
             Tab("Aktivität", systemImage: "sparkles", value: SettingsTab.activity) {
-                SettingsPage { ActivitySettingsSection() }
+                SettingsPage(
+                    symbol: "sparkles",
+                    intro: "Hier stellst du ein, ob Takt erkennt, woran du gerade arbeitest, und sich meldet, wenn der Timer nicht dazu passt. Alles bleibt auf diesem Mac.",
+                    helpTopic: "activity"
+                ) { ActivitySettingsSection() }
             }
         }
         // 640 × 460: Platz für acht Reiter in der Symbolleiste und die Übersicht „Mitteilungen“.
@@ -56,12 +88,29 @@ struct SettingsView: View {
     }
 }
 
-/// Eine Seite im Einstellungsfenster: gruppiertes Formular.
-private struct SettingsPage<Content: View>: View {
+/// Eine Seite im Einstellungsfenster: gruppiertes Formular, oben ein Einleitungssatz
+/// („Hier stellst du ein, …“), unten der Link „Mehr in der Hilfe →“ zum passenden Thema.
+struct SettingsPage<Content: View>: View {
+    let symbol: String
+    let intro: String
+    /// Kennung des Hilfe-Themas (siehe `HelpOpener`).
+    let helpTopic: String
     @ViewBuilder var content: () -> Content
 
     var body: some View {
-        Form { content() }
-            .formStyle(.grouped)
+        Form {
+            Section {
+                SettingsIntro(symbol: symbol, text: intro)
+            }
+            content()
+            Section {
+            } footer: {
+                HStack {
+                    Spacer()
+                    HelpLink(topic: helpTopic)
+                }
+            }
+        }
+        .formStyle(.grouped)
     }
 }

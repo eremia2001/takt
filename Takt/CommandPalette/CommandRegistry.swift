@@ -36,7 +36,7 @@ struct CommandRegistry {
 
     func commands(now: Date = .now) -> [Command] {
         timerCommands(now: now) + projectCommands() + navigationCommands() + reportCommands()
-            + exportCommands(now: now) + settingsCommands() + quickEntryCommands()
+            + exportCommands(now: now) + settingsCommands() + quickEntryCommands() + helpCommands()
     }
 
     private func timerCommands(now: Date) -> [Command] {
@@ -237,6 +237,52 @@ struct CommandRegistry {
         )]
     }
 
+    /// Hilfe: „Takt-Hilfe“ (immer sichtbar), „Hilfe: <Thema>“ je Thema und „Einführung zeigen“
+    /// (beide erst bei Suche). Gruppe „Navigation“, weil sie ein Fenster bzw. Sheet öffnen.
+    private func helpCommands() -> [Command] {
+        var result = [Command(
+            id: "help.open",
+            title: "Takt-Hilfe",
+            subtitle: "⌘?",
+            group: .navigation,
+            keywords: ["hilfe", "help", "anleitung", "handbuch", "erklärung", "fragen"],
+            icon: "questionmark.circle",
+            perform: { showHelp(nil) }
+        )]
+        result += HelpContent.topics.map { topic in
+            Command(
+                id: "help.\(topic.id)",
+                title: "Hilfe: \(topic.title)",
+                subtitle: topic.summary,
+                group: .navigation,
+                keywords: topic.keywords + ["hilfe", "help", "anleitung", "wie"],
+                icon: topic.icon,
+                showsWhenEmpty: false,
+                priority: -4,
+                perform: { showHelp(topic.id) }
+            )
+        }
+        result.append(Command(
+            id: "help.onboarding",
+            title: "Einführung zeigen",
+            subtitle: "Die fünf Seiten vom ersten Start",
+            group: .navigation,
+            keywords: ["onboarding", "einführung", "tour", "willkommen", "erste schritte"],
+            icon: "sparkles",
+            showsWhenEmpty: false,
+            perform: { [navigator] in navigator?.requestOnboarding() }
+        ))
+        return result
+    }
+
+    private func showHelp(_ topicID: String?) {
+        if let topicID, let navigator {
+            navigator.request(helpTopic: topicID)
+        } else {
+            HelpCenter.shared.show(topicID: topicID)
+        }
+    }
+
     // MARK: Schnelleingabe-Treffer
 
     /// Treffer für Text, der wie eine Schnelleingabe aussieht: Ziffern oder `#` im Text (Zeit, Tag)
@@ -310,7 +356,8 @@ struct CommandRegistry {
     }
 
     /// CSV des laufenden Monats über den Sichern-Dialog (wie im Bereich „Berichte“).
-    private func export(_ kind: CSVExporter.Kind) {
+    /// Auch für das App-Menü (Ablage › Einträge als CSV exportieren …).
+    func export(_ kind: CSVExporter.Kind) {
         let now = Date.now
         let period = ReportPeriod.month(now)
         guard let report = store.report(

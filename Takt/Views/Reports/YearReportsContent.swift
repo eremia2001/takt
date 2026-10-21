@@ -162,7 +162,7 @@ struct YearReportsMetrics: View {
             }
             .help("\(previousYear): \(ReportsFormat.duration(report.previousYearTotal))")
 
-            ReportsTile(title: "Abrechenbar", theme: theme) {
+            ReportsTile(title: "Abrechenbar", theme: theme, help: TermHelp.billable) {
                 ReportsBigNumber(text: ReportsFormat.duration(data.roundedBillable), theme: theme)
             } caption: {
                 Text(ReportsFormat.roundingHint(data.rounding))
@@ -188,7 +188,8 @@ struct YearReportsMetrics: View {
             }
             .help("\(previousYear): \(ReportsFormat.money(report.previousYearAmount)) \(data.currencyCode)")
 
-            ReportsTile(title: "Ø pro aktivem Tag", theme: theme) {
+            ReportsTile(title: "Ø pro aktivem Tag", theme: theme,
+                        help: "Durchschnitt über die Tage, an denen überhaupt etwas erfasst wurde.") {
                 ReportsBigNumber(text: ReportsFormat.duration(report.averagePerActiveDay), theme: theme)
             } caption: {
                 Text(ReportsFormat.activeDays(report.activeDays))
