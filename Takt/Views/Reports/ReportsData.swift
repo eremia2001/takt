@@ -69,6 +69,15 @@ struct ReportsData {
     /// Mindestens eine Projektzeile hat einen Stundensatz (sonst gibt es keinen Umsatz).
     var hasAnyRate: Bool { report.rows.contains { $0.hourlyRate != nil } }
 
+    /// Kachel „Effektiver Satz“ nur in Woche und Monat (ein Tag ist zu kurz für eine Aussage,
+    /// der Jahresbericht hat eigene Kennzahlen).
+    var showsRateTile: Bool {
+        switch report.period {
+        case .week, .month: true
+        case .day, .custom: false
+        }
+    }
+
     /// Projekte mit abrechenbarer Zeit, aber ohne Stundensatz.
     var billableRowsWithoutRate: [ProjectReportRow] {
         report.rows.filter { $0.hourlyRate == nil && $0.roundedBillableDuration > 0 }
@@ -201,6 +210,8 @@ struct ReportsActions {
     var exportSummary: () -> Void = {}
     /// Reiter „Jahr“: Monatszeilen und Kundentabelle als CSV.
     var exportYear: () -> Void = {}
+    /// Öffnet „Timesheet als PDF“ für den gezeigten Zeitraum.
+    var exportTimesheet: () -> Void = {}
     var importToggl: () -> Void = {}
     /// Öffnet „Freie Tage“ für den gewählten Zeitraum.
     var editDaysOff: () -> Void = {}

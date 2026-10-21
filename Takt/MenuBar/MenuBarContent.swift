@@ -60,8 +60,22 @@ struct MenuBarContent: View {
             quit: { NSApp.terminate(nil) },
             skipPomodoroPhase: { pomodoro.skipPhase() },
             quickEntry: QuickEntryEngine(store: store).handlers,
-            openQuickEntry: { controller.showQuickEntry() }
+            openQuickEntry: { controller.showQuickEntry() },
+            openCommandPalette: openCommandPalette
         )
+    }
+}
+
+extension MenuBarContent {
+    /// „Befehle… ⌘K“: Popover schließen, Hauptfenster nach vorn, Palette öffnen
+    /// (ist das Fenster noch nicht da, öffnet `MainView` sie beim Erscheinen).
+    private func openCommandPalette() {
+        for window in NSApp.windows where window.isVisible
+            && String(describing: type(of: window)).contains("MenuBarExtra") {
+            window.close()
+        }
+        controller.showMainWindow(openWindow: openWindow)
+        DispatchQueue.main.async { CommandPaletteRequest.post() }
     }
 }
 

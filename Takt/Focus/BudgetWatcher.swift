@@ -111,7 +111,10 @@ final class BudgetWatcher {
         content.categoryIdentifier = NotificationCategories.Budget.category
         content.userInfo = [Self.projectKey: usage.project.id.uuidString]
         // Eine Mitteilung je Projekt: „überschritten“ ersetzt die 80-%-Mitteilung.
-        NotificationCategories.deliverNow(identifier: Self.requestPrefix + usage.project.id.uuidString, content: content)
+        NotificationCategories.deliverNow(
+            identifier: Self.requestPrefix + usage.project.id.uuidString, content: content,
+            kind: .budget, settings: settings
+        )
         Self.logger.info("Budget-Warnung \(threshold) %: \(usage.project.name, privacy: .private) (\(used, privacy: .public) von \(budget, privacy: .public) h).")
     }
 

@@ -1,22 +1,44 @@
 import SwiftUI
 import TaktCore
 
-/// Kennzahlen-Reihe: Gesamt · Business/Privat · Abrechenbar · Umsatz.
+/// Kennzahlen-Reihe: Gesamt · Business/Privat · Abrechenbar · Umsatz, in Woche und Monat dazu
+/// „Effektiver Satz“.
 /// Dezente Kacheln, große Zahl, kleine Beschriftung. In der Woche mit Wochenziel darunter
 /// eine schmale Zeile mit dem Fortschritt.
 struct ReportsMetrics: View {
     let data: ReportsData
     let theme: DesignTheme
 
+    @State private var width: CGFloat = 1_000
+
     private var report: Report { data.report }
+
+    /// Kachel „Effektiver Satz“ in der Reihe – im schmalen Fenster als Zeile darunter.
+    private var rateInRow: Bool { width >= ReportsRateTile.minRowWidth }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             tiles
+            if data.showsRateTile, !rateInRow {
+                rateFigures.row
+            }
             if let goal = report.goal {
                 ReportsGoalRow(goal: goal, workdays: report.workdays, theme: theme)
             }
         }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+    }
+
+    private var rateFigures: ReportsRateTile {
+        ReportsRateTile(
+            effective: report.effectiveRate,
+            nominal: report.nominalRate,
+            nonBillableShare: report.nonBillableShare,
+            isLow: report.isEffectiveRateLow(),
+            hasAnyRate: data.hasAnyRate,
+            currencyCode: data.currencyCode,
+            theme: theme
+        )
     }
 
     private var tiles: some View {
@@ -59,6 +81,10 @@ struct ReportsMetrics: View {
                 }
             } caption: {
                 Text(revenueCaption)
+            }
+
+            if data.showsRateTile, rateInRow {
+                rateFigures
             }
         }
         // Alle Kacheln so hoch wie die höchste.
@@ -224,14 +250,109 @@ struct ReportsTile<Value: View, Caption: View>: View {
 struct ReportsBigNumber: View {
     let text: String
     var dimmed = false
+    /// Warnfarbe statt Primärfarbe (z. B. effektiver Satz deutlich unter dem nominalen).
+    var tint: Color?
     let theme: DesignTheme
 
     var body: some View {
         Text(text)
             .font(.system(size: 30, weight: .bold, design: .rounded))
             .monospacedDigit()
-            .foregroundStyle(dimmed ? AnyShapeStyle(theme.tertiary) : AnyShapeStyle(.primary))
+            .foregroundStyle(dimmed ? AnyShapeStyle(theme.tertiary)
+                             : tint.map { AnyShapeStyle($0) } ?? AnyShapeStyle(.primary))
             .lineLimit(1)
             .minimumScaleFactor(0.6)
+    }
+}
+
+/// Kachel „Effektiver Satz“: große Zahl „87,50 €/h“, darunter „nominal 95,00 · 9 % nicht
+/// abrechenbar“ (zweizeilig, wenn die Kachel schmal ist). Liegt der effektive Satz mehr als
+/// 15 % unter dem nominalen Durchschnitt, steht die Zahl in Orange. Gemeinsam für Woche, Monat
+/// und Jahr.
+struct ReportsRateTile: View {
+    /// Betrag ÷ Business-Zeit (inkl. nicht abrechenbar); `nil` ohne Betrag.
+    let effective: Decimal?
+    /// Betrag ÷ abgerechnete Stunden der Projekte mit Satz.
+    let nominal: Decimal?
+    let nonBillableShare: Double
+    let isLow: Bool
+    let hasAnyRate: Bool
+    let currencyCode: String
+    let theme: DesignTheme
+
+    static let help = "Effektiver Satz: Betrag ÷ gesamte Business-Zeit inkl. nicht abrechenbarer Zeit "
+        + "(Privatzeit ausgenommen). Nominal: Betrag ÷ abgerechnete Stunden."
+
+    /// Ab dieser Breite der Kennzahlen-Reihe passt die Kachel als fünfte daneben; darunter wird
+    /// sie zur schmalen Zeile (`row`), damit die anderen Zahlen nicht abgeschnitten werden.
+    static let minRowWidth: CGFloat = 820
+
+    /// Schmale Zeile unter den Kacheln: „Effektiver Satz  70,91 €/h   nominal 84,64 · 17 % nicht abrechenbar“.
+    var row: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text("Effektiver Satz")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(theme.tertiary)
+            if let effective {
+                Text("\(ReportsFormat.money(effective)) \(ReportsFormat.currencySymbol(currencyCode))/h")
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundStyle(isLow ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.primary))
+                Text("\(nominalText) · \(shareText)")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+            } else {
+                Text(hasAnyRate ? "kein Umsatz im Zeitraum" : "kein Stundensatz hinterlegt")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .monospacedDigit()
+        .lineLimit(1)
+        .padding(.horizontal, 16)
+        .frame(height: 36)
+        .background(theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(theme.hairline, lineWidth: 1))
+        .help(Self.help)
+        .accessibilityElement(children: .combine)
+    }
+
+    var body: some View {
+        ReportsTile(title: "Effektiver Satz", theme: theme) {
+            if let effective {
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    ReportsBigNumber(text: ReportsFormat.money(effective), tint: isLow ? .orange : nil, theme: theme)
+                    Text("\(ReportsFormat.currencySymbol(currencyCode))/h")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(theme.tertiary)
+                        .lineLimit(1)
+                        .fixedSize()
+                }
+            } else {
+                ReportsBigNumber(text: "–", dimmed: true, theme: theme)
+            }
+        } caption: {
+            if effective != nil {
+                ViewThatFits(in: .horizontal) {
+                    Text("\(nominalText) · \(shareText)")
+                        .fixedSize()
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(nominalText)
+                        Text(shareText)
+                    }
+                }
+            } else {
+                Text(hasAnyRate ? "kein Umsatz im Zeitraum" : "kein Stundensatz hinterlegt")
+            }
+        }
+        .help(Self.help)
+    }
+
+    private var nominalText: String {
+        nominal.map { "nominal \(ReportsFormat.money($0))" } ?? "nominal –"
+    }
+
+    private var shareText: String {
+        "\(ReportsFormat.percent(nonBillableShare)) nicht abrechenbar"
     }
 }

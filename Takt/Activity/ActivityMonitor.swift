@@ -496,6 +496,9 @@ final class ActivityMonitor {
     }
 
     private func notify(title: String, body: String, projectId: UUID, runningId: UUID?, actions: Bool) {
+        // Mitteilungen aus (oder Ruhezeit): Vorschlag und automatischer Start laufen weiter,
+        // nur ohne Mitteilung. Das Gate loggt den Grund.
+        guard NotificationGate.allows(kind: .activity, settings: settings) else { return }
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
@@ -505,7 +508,9 @@ final class ActivityMonitor {
             ActivityNotificationID.projectKey: projectId.uuidString,
             ActivityNotificationID.runningKey: runningId?.uuidString ?? "",
         ]
-        NotificationCategories.deliverNow(identifier: ActivityNotificationID.request, content: content)
+        NotificationCategories.deliverNow(
+            identifier: ActivityNotificationID.request, content: content, kind: .activity, settings: settings
+        )
         deliveredProjectId = actions ? projectId : nil
     }
 

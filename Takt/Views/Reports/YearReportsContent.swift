@@ -121,15 +121,39 @@ struct YearReportsContent: View {
 
 // MARK: - Kennzahlen
 
-/// Gesamt (± Vorjahr) · Abrechenbar · Umsatz (± Vorjahr) · Ø pro aktivem Tag.
+/// Gesamt (± Vorjahr) · Abrechenbar · Umsatz (± Vorjahr) · Ø pro aktivem Tag · Effektiver Satz.
 struct YearReportsMetrics: View {
     let data: YearReportsData
     let theme: DesignTheme
 
+    @State private var width: CGFloat = 1_000
+
     private var report: YearReport { data.report }
     private var previousYear: String { String(data.year - 1) }
 
+    private var rateFigures: ReportsRateTile {
+        ReportsRateTile(
+            effective: report.effectiveRate,
+            nominal: report.nominalRate,
+            nonBillableShare: report.nonBillableShare,
+            isLow: report.isEffectiveRateLow(),
+            hasAnyRate: data.hasAnyRate,
+            currencyCode: data.currencyCode,
+            theme: theme
+        )
+    }
+
+    /// Im schmalen Fenster steht „Effektiver Satz“ als Zeile unter den Kacheln.
     var body: some View {
+        let inRow = width >= ReportsRateTile.minRowWidth
+        VStack(alignment: .leading, spacing: 10) {
+            tiles(rateInRow: inRow)
+            if !inRow { rateFigures.row }
+        }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+    }
+
+    private func tiles(rateInRow: Bool) -> some View {
         HStack(alignment: .top, spacing: 12) {
             ReportsTile(title: "Gesamt", theme: theme) {
                 ReportsBigNumber(text: ReportsFormat.duration(report.total), theme: theme)
@@ -169,6 +193,10 @@ struct YearReportsMetrics: View {
             } caption: {
                 Text(ReportsFormat.activeDays(report.activeDays))
             }
+
+            if rateInRow {
+                rateFigures
+            }
         }
         // Alle Kacheln so hoch wie die höchste.
         .fixedSize(horizontal: false, vertical: true)
@@ -194,7 +222,7 @@ struct YearReportsMetrics: View {
 
 // MARK: - Kunden
 
-/// Kunde · Projekte · Stunden · Abrechenbar · Betrag, nach Betrag sortiert, mit Summenzeile.
+/// Kunde · Projekte · Stunden · Abrechenbar · Betrag · Eff. Satz, nach Betrag sortiert, mit Summenzeile.
 struct YearClientsTable: View {
     let data: YearReportsData
     let theme: DesignTheme
@@ -204,6 +232,7 @@ struct YearClientsTable: View {
         static let hours: CGFloat = 64
         static let billable: CGFloat = 84
         static let amount: CGFloat = 92
+        static let effective: CGFloat = 70
     }
 
     var body: some View {
@@ -225,6 +254,9 @@ struct YearClientsTable: View {
             Text("Stunden").frame(width: Column.hours, alignment: .trailing)
             Text("Abrechenbar").frame(width: Column.billable, alignment: .trailing)
             Text("Betrag \(data.currencyCode)").frame(width: Column.amount, alignment: .trailing)
+            Text("Eff. Satz")
+                .frame(width: Column.effective, alignment: .trailing)
+                .help(ReportsProjectTable.effectiveRateHelp)
         }
         .font(.system(size: 11, weight: .medium))
         .foregroundStyle(theme.tertiary)
@@ -256,6 +288,7 @@ struct YearClientsTable: View {
                 .font(.system(size: 13, weight: hasAmount ? .semibold : .regular))
                 .foregroundStyle(hasAmount ? AnyShapeStyle(.primary) : AnyShapeStyle(theme.tertiary))
                 .frame(width: Column.amount, alignment: .trailing)
+            effectiveCell(hasAmount ? client.effectiveRate : nil, weight: .regular)
         }
         .monospacedDigit()
         .lineLimit(1)
@@ -283,10 +316,24 @@ struct YearClientsTable: View {
                 .font(.system(size: 14, weight: .bold, design: .rounded))
                 .foregroundStyle(data.hasAnyRate ? AnyShapeStyle(.primary) : AnyShapeStyle(theme.tertiary))
                 .frame(width: Column.amount, alignment: .trailing)
+            effectiveCell(data.hasAnyRate ? data.report.effectiveRate : nil, weight: .semibold,
+                          isLow: data.report.isEffectiveRateLow(),
+                          help: "Betrag ÷ gesamte Business-Zeit inkl. nicht abrechenbar (ohne Privatzeit)")
         }
         .monospacedDigit()
         .lineLimit(1)
         .padding(.vertical, 12)
+    }
+
+    /// Effektiver Satz, dezent (Kunden haben oft mehrere Sätze – daher ohne Warnfarbe je Zeile).
+    private func effectiveCell(_ rate: Decimal?, weight: Font.Weight, isLow: Bool = false,
+                               help: String = ReportsProjectTable.effectiveRateHelp) -> some View {
+        Text(rate.map(ReportsFormat.money) ?? "–")
+            .font(.system(size: 12, weight: weight))
+            .foregroundStyle(rate == nil ? AnyShapeStyle(theme.tertiary)
+                             : isLow ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.secondary))
+            .frame(width: Column.effective, alignment: .trailing)
+            .help(rate == nil ? "" : help)
     }
 }
 

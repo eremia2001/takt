@@ -67,7 +67,8 @@ final class ForgottenTimerGuard {
 
     /// Prüft den laufenden Eintrag und fragt bei Bedarf nach.
     func check(now: Date = .now) {
-        guard let running = store.running else { return }
+        // Ausgeschaltet: weder Alert noch Mitteilung.
+        guard settings.forgottenTimerEnabled, let running = store.running else { return }
         let entryId = running.entry.id
         let limit = TimeInterval(settings.forgottenTimerHours) * 3600
         guard now.timeIntervalSince(running.entry.startedAt) >= limit,
@@ -171,6 +172,8 @@ final class ForgottenTimerGuard {
     }
 
     private func postNotification(for running: RunningState, now: Date) {
+        // Das Gate lässt den vergessenen Timer auch in Ruhezeiten durch; es prüft nur den Schalter.
+        guard NotificationGate.allows(kind: .forgottenTimer, now: now, settings: settings) else { return }
         let content = UNMutableNotificationContent()
         content.title = "Läuft ‚\(running.project.name)‘ wirklich noch?"
         content.body = Self.detail(for: running, now: now)

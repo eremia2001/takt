@@ -6,9 +6,12 @@ import TaktCore
 /// Toggl-Import. Lädt den Bericht neu bei Wechsel von Zeitraum oder Einstellungen, bei jeder
 /// Datenänderung (auch aus dem Widget) und – nur solange ein Timer läuft – minütlich.
 /// Im Reiter „Jahr“ (`year != nil`) gilt dasselbe für den Jahresbericht.
+/// Reagiert auf `AppNavigator.requestedReportKind` (Befehlspalette, Menüleiste) mit einem Wechsel
+/// des Zeitraums.
 struct ReportsView: View {
     @Environment(TaktStore.self) private var store
     @Environment(AppSettings.self) private var settings
+    @Environment(AppNavigator.self) private var navigator
 
     @State private var period: ReportPeriod = .week(.now)
     @State private var data: ReportsData?
@@ -19,6 +22,8 @@ struct ReportsView: View {
     @State private var noticeID = 0
     @State private var isImportShown = false
     @State private var isDaysOffShown = false
+    /// Zeitraum, mit dem „Timesheet als PDF“ geöffnet wird; `nil` = Sheet zu.
+    @State private var timesheetInterval: TimesheetInterval?
     /// Erst beim Erscheinen angelegt, damit nicht jede Neuerzeugung der View einen Beobachter registriert.
     @State private var changes: ReportsChangeMonitor?
 
@@ -35,8 +40,11 @@ struct ReportsView: View {
         }
         .onAppear {
             if changes == nil { changes = ReportsChangeMonitor() }
+            // Eine Anforderung kann vor dem Erscheinen gekommen sein (Bereichswechsel).
+            applyRequestedKind()
             reload()
         }
+        .onChange(of: navigator.revision) { applyRequestedKind() }
         .onChange(of: period) { reload() }
         .onChange(of: year) { reload() }
         .onChange(of: settings.rounding) { reload() }
@@ -51,6 +59,36 @@ struct ReportsView: View {
         .sheet(isPresented: $isDaysOffShown, onDismiss: { reload() }) {
             DaysOffSheet(month: daysOffMonth)
         }
+        .sheet(item: $timesheetInterval) { request in
+            TimesheetExportSheet(initialInterval: request.interval) { name in
+                showNotice("Gespeichert: \(name)")
+            }
+        }
+    }
+
+    /// Führt eine angeforderte Art des Zeitraums aus (immer bezogen auf heute).
+    /// - Returns: `true`, wenn sich etwas geändert hat (das Neuladen übernimmt dann `onChange`).
+    @discardableResult
+    private func applyRequestedKind() -> Bool {
+        guard let kind = navigator.consumeReportKind() else { return false }
+        let now = Date.now
+        switch kind {
+        case .year:
+            let current = Calendar.current.component(.year, from: now)
+            guard year != current else { return false }
+            year = current
+        case .day, .week, .month:
+            let target = kind.period(from: .day(now), now: now, calendar: .current)
+            guard year != nil || period != target else { return false }
+            year = nil
+            period = target
+        case .custom:
+            // Wird nicht angefordert; zur Sicherheit den gezeigten Zeitraum als freien übernehmen.
+            let interval = year.map { ReportsYear.interval($0, calendar: .current) } ?? period.interval(calendar: .current)
+            year = nil
+            period = .custom(interval)
+        }
+        return true
     }
 
     private func screen(now: Date) -> some View {
@@ -65,6 +103,7 @@ struct ReportsView: View {
                 exportEntries: { export(.entries) },
                 exportSummary: { export(.summary) },
                 exportYear: { export(.year) },
+                exportTimesheet: { timesheetInterval = TimesheetInterval(interval: shownInterval) },
                 importToggl: { isImportShown = true },
                 editDaysOff: { isDaysOffShown = true }
             )
@@ -110,6 +149,11 @@ struct ReportsView: View {
             currencyCode: settings.currencyCode,
             now: now
         )
+    }
+
+    /// Gezeigter Zeitraum (im Reiter „Jahr“ das ganze Jahr).
+    private var shownInterval: DateInterval {
+        year.map { ReportsYear.interval($0, calendar: .current) } ?? period.interval(calendar: .current)
     }
 
     /// Monat für „Freie Tage“: enthält der Zeitraum heute, der heutige, sonst der seines Anfangs.
@@ -188,6 +232,12 @@ struct ReportsView: View {
             withAnimation(.easeIn(duration: 0.3)) { notice = nil }
         }
     }
+}
+
+/// Anlass für das Timesheet-Sheet (`sheet(item:)` braucht `Identifiable`).
+struct TimesheetInterval: Identifiable {
+    let id = UUID()
+    let interval: DateInterval
 }
 
 /// Zählt Datenänderungen (Darwin-Notification von App und Widget), damit auch Änderungen an

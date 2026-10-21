@@ -234,8 +234,7 @@ final class PomodoroController {
         content.body = autoStop
             ? "Einheit \(finished) von \(cycles) geschafft – der Timer ist gestoppt."
             : "Einheit \(finished) von \(cycles) geschafft. Der Timer läuft weiter."
-        content.sound = .default
-        NotificationCategories.deliverNow(identifier: ID.breakStart, content: content)
+        deliver(content, identifier: ID.breakStart)
         Self.logger.info("Pomodoro-Einheit \(finished) beendet – \(isLong ? "lange " : "", privacy: .public)Pause \(minutes) Min.")
 
         if autoStop {
@@ -263,8 +262,7 @@ final class PomodoroController {
             let content = UNMutableNotificationContent()
             content.title = "Pause vorbei"
             content.body = "Einheit \(min(cycle, cycles)) von \(cycles) läuft."
-            content.sound = .default
-            NotificationCategories.deliverNow(identifier: ID.breakOver, content: content)
+            deliver(content, identifier: ID.breakOver)
             menuBar.showOverlay(HotKeyOverlayMessage(kind: .pomodoro, text: "Pause vorbei · Einheit \(min(cycle, cycles))"),
                                 visibleFor: Self.overlayDuration)
             return
@@ -286,8 +284,7 @@ final class PomodoroController {
             content.title = "Pause vorbei"
             content.body = "Starte einen Timer für die nächste Einheit."
         }
-        content.sound = .default
-        NotificationCategories.deliverNow(identifier: ID.breakOver, content: content)
+        deliver(content, identifier: ID.breakOver)
         menuBar.showOverlay(
             HotKeyOverlayMessage(
                 kind: .pomodoro,
@@ -297,6 +294,13 @@ final class PomodoroController {
             visibleFor: Self.overlayDuration
         )
         Self.logger.info("Pomodoro-Pause vorbei.")
+    }
+
+    /// Pomodoro-Mitteilung über das Gate (Schalter `pomodoroNotificationsEnabled`, Ruhezeiten);
+    /// Ton nur mit `pomodoroSoundEnabled`. Die Einblendung am Bildschirm bleibt davon unberührt.
+    private func deliver(_ content: UNMutableNotificationContent, identifier: String) {
+        content.sound = settings.pomodoroSoundEnabled ? .default : nil
+        NotificationCategories.deliverNow(identifier: identifier, content: content, kind: .pomodoro, settings: settings)
     }
 
     private func advanceAfterBreak(wasLong: Bool) {

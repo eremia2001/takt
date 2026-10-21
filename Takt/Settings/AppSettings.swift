@@ -276,6 +276,54 @@ final class AppSettings {
         didSet { defaults.set(quickEntryInMenuBar, forKey: Key.quickEntryInMenuBar) }
     }
 
+    // MARK: Mitteilungen
+
+    /// Nachfrage bei vergessenem Timer (Alert bzw. Mitteilung); Grenze `forgottenTimerHours`.
+    var forgottenTimerEnabled: Bool {
+        didSet { defaults.set(forgottenTimerEnabled, forKey: Key.forgottenTimerEnabled) }
+    }
+    /// Mitteilungen der Aktivitäts-Erkennung. Aus: Vorschläge und automatischer Start laufen
+    /// weiter, nur ohne Mitteilung.
+    var activityNotificationsEnabled: Bool {
+        didSet { defaults.set(activityNotificationsEnabled, forKey: Key.activityNotificationsEnabled) }
+    }
+    /// In-App-Hinweis „Termin läuft – Timer auf …“ in „Heute“.
+    var calendarMeetingHintEnabled: Bool {
+        didSet { defaults.set(calendarMeetingHintEnabled, forKey: Key.calendarMeetingHintEnabled) }
+    }
+    /// Mitteilung „Geplant: X um 14:00“ zum Beginn eines geplanten Blocks.
+    var calendarPlannedBlockNotificationEnabled: Bool {
+        didSet {
+            defaults.set(calendarPlannedBlockNotificationEnabled, forKey: Key.calendarPlannedBlockNotificationEnabled)
+        }
+    }
+    /// Pomodoro-Mitteilungen (Pause beginnt, Pause vorbei). Die Einblendung bleibt.
+    var pomodoroNotificationsEnabled: Bool {
+        didSet { defaults.set(pomodoroNotificationsEnabled, forKey: Key.pomodoroNotificationsEnabled) }
+    }
+    /// Ton bei Pomodoro-Mitteilungen.
+    var pomodoroSoundEnabled: Bool {
+        didSet { defaults.set(pomodoroSoundEnabled, forKey: Key.pomodoroSoundEnabled) }
+    }
+    /// Ruhezeiten: zwischen `quietHoursStart` und `quietHoursEnd` keine Mitteilungen
+    /// (außer „vergessener Timer“), siehe `NotificationGate`.
+    var notificationsQuietHoursEnabled: Bool {
+        didSet { defaults.set(notificationsQuietHoursEnabled, forKey: Key.notificationsQuietHoursEnabled) }
+    }
+    /// Beginn der Ruhezeit in Minuten seit Mitternacht (0–1439, Standard 1080 = 18:00).
+    var quietHoursStart: Int {
+        didSet { defaults.set(quietHoursStart, forKey: Key.quietHoursStart) }
+    }
+    /// Ende der Ruhezeit in Minuten seit Mitternacht (0–1439, Standard 480 = 08:00).
+    /// Kleiner als der Beginn = über Mitternacht.
+    var quietHoursEnd: Int {
+        didSet { defaults.set(quietHoursEnd, forKey: Key.quietHoursEnd) }
+    }
+    /// Samstag und Sonntag ganztägig still (unabhängig von den Ruhezeiten).
+    var notificationsWeekendQuiet: Bool {
+        didSet { defaults.set(notificationsWeekendQuiet, forKey: Key.notificationsWeekendQuiet) }
+    }
+
     // MARK: Interna
 
     @ObservationIgnored private let defaults: UserDefaults
@@ -325,6 +373,16 @@ final class AppSettings {
         static let menuBarShowProjectName = "settings.menuBarShowProjectName"
         static let menuBarShowTodayTotal = "settings.menuBarShowTodayTotal"
         static let menuBarIdleMode = "settings.menuBarIdleMode"
+        static let forgottenTimerEnabled = "settings.forgottenTimerEnabled"
+        static let activityNotificationsEnabled = "settings.activityNotificationsEnabled"
+        static let calendarMeetingHintEnabled = "settings.calendarMeetingHintEnabled"
+        static let calendarPlannedBlockNotificationEnabled = "settings.calendarPlannedBlockNotificationEnabled"
+        static let pomodoroNotificationsEnabled = "settings.pomodoroNotificationsEnabled"
+        static let pomodoroSoundEnabled = "settings.pomodoroSoundEnabled"
+        static let notificationsQuietHoursEnabled = "settings.notificationsQuietHoursEnabled"
+        static let quietHoursStart = "settings.quietHoursStart"
+        static let quietHoursEnd = "settings.quietHoursEnd"
+        static let notificationsWeekendQuiet = "settings.notificationsWeekendQuiet"
     }
 
     /// Standard-Kurzbefehl: ⌃⌥⌘T.
@@ -334,6 +392,9 @@ final class AppSettings {
     static let defaultQuickEntryKeyCode = 45
     static let defaultQuickEntryModifiers = defaultShortcutModifiers
     static let defaultCurrencyCode = "EUR"
+    /// Standard-Ruhezeit 18:00–08:00 (Minuten seit Mitternacht).
+    static let defaultQuietHoursStart = 18 * 60
+    static let defaultQuietHoursEnd = 8 * 60
     private static let posix = Locale(identifier: "en_US_POSIX")
 
     init(defaults: UserDefaults = .standard) {
@@ -380,6 +441,16 @@ final class AppSettings {
             Key.menuBarShowProjectName: true,
             Key.menuBarShowTodayTotal: false,
             Key.menuBarIdleMode: MenuBarIdleMode.symbol.rawValue,
+            Key.forgottenTimerEnabled: true,
+            Key.activityNotificationsEnabled: true,
+            Key.calendarMeetingHintEnabled: true,
+            Key.calendarPlannedBlockNotificationEnabled: true,
+            Key.pomodoroNotificationsEnabled: true,
+            Key.pomodoroSoundEnabled: true,
+            Key.notificationsQuietHoursEnabled: false,
+            Key.quietHoursStart: Self.defaultQuietHoursStart,
+            Key.quietHoursEnd: Self.defaultQuietHoursEnd,
+            Key.notificationsWeekendQuiet: false,
         ])
 
         musicEnabled = defaults.bool(forKey: Key.musicEnabled)
@@ -438,6 +509,18 @@ final class AppSettings {
         menuBarShowProjectName = defaults.bool(forKey: Key.menuBarShowProjectName)
         menuBarShowTodayTotal = defaults.bool(forKey: Key.menuBarShowTodayTotal)
         menuBarIdleMode = defaults.string(forKey: Key.menuBarIdleMode).flatMap(MenuBarIdleMode.init(rawValue:)) ?? .symbol
+        forgottenTimerEnabled = defaults.bool(forKey: Key.forgottenTimerEnabled)
+        activityNotificationsEnabled = defaults.bool(forKey: Key.activityNotificationsEnabled)
+        calendarMeetingHintEnabled = defaults.bool(forKey: Key.calendarMeetingHintEnabled)
+        calendarPlannedBlockNotificationEnabled = defaults.bool(forKey: Key.calendarPlannedBlockNotificationEnabled)
+        pomodoroNotificationsEnabled = defaults.bool(forKey: Key.pomodoroNotificationsEnabled)
+        pomodoroSoundEnabled = defaults.bool(forKey: Key.pomodoroSoundEnabled)
+        notificationsQuietHoursEnabled = defaults.bool(forKey: Key.notificationsQuietHoursEnabled)
+        quietHoursStart = Self.clamp(defaults.integer(forKey: Key.quietHoursStart), 0...1439,
+                                     fallback: Self.defaultQuietHoursStart)
+        quietHoursEnd = Self.clamp(defaults.integer(forKey: Key.quietHoursEnd), 0...1439,
+                                   fallback: Self.defaultQuietHoursEnd)
+        notificationsWeekendQuiet = defaults.bool(forKey: Key.notificationsWeekendQuiet)
 
         // `didSet` greift in `init` nicht: Pausenerinnerung und Wochenziel einmal beim Start für das Widget spiegeln.
         SharedSettings.breakReminderEnabled = breakReminderEnabled && !pomodoroEnabled
@@ -458,3 +541,6 @@ final class AppSettings {
         range.contains(value) ? value : fallback
     }
 }
+
+/// Schalter und Ruhezeiten für `NotificationGate`.
+extension AppSettings: NotificationGateSettings {}

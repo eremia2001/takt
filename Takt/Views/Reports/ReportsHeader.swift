@@ -216,6 +216,8 @@ struct ReportsHeader: View {
                     Button("Einträge als CSV …", action: actions.exportEntries)
                     Button("Zusammenfassung als CSV …", action: actions.exportSummary)
                 }
+                Divider()
+                Button("Timesheet als PDF …", action: actions.exportTimesheet)
             } label: {
                 pillLabel("Exportieren", systemImage: "square.and.arrow.up")
             }
@@ -223,7 +225,7 @@ struct ReportsHeader: View {
             .buttonStyle(.plain)
             .menuIndicator(.hidden)
             .fixedSize()
-            .help("Bericht als CSV-Datei speichern")
+            .help("Bericht als CSV-Datei oder Timesheet als PDF speichern")
 
             Button(action: actions.importToggl) {
                 pillLabel("Toggl importieren …", systemImage: "square.and.arrow.down")

@@ -28,6 +28,10 @@ struct ReportsProjectTable: View {
         var roundedTotal: TimeInterval
         var roundedBillable: TimeInterval
         var amount: Decimal
+        /// Effektiver Satz des Zeitraums (Betrag ÷ Business-Zeit).
+        var effectiveRate: Decimal?
+        /// Effektiver Satz liegt deutlich unter dem nominalen (Warnfarbe).
+        var isEffectiveRateLow: Bool
     }
 
     init(data: ReportsData, theme: DesignTheme, initiallyExpanded: Set<UUID> = []) {
@@ -39,7 +43,9 @@ struct ReportsProjectTable: View {
             total: report.total,
             roundedTotal: report.roundedTotal,
             roundedBillable: report.roundedBillable,
-            amount: report.amount
+            amount: report.amount,
+            effectiveRate: report.effectiveRate,
+            isEffectiveRateLow: report.isEffectiveRateLow()
         )
         currencyCode = data.currencyCode
         hasAnyRate = data.hasAnyRate
@@ -55,7 +61,9 @@ struct ReportsProjectTable: View {
             total: data.report.total,
             roundedTotal: data.roundedTotal,
             roundedBillable: data.roundedBillable,
-            amount: data.report.amount
+            amount: data.report.amount,
+            effectiveRate: data.report.effectiveRate,
+            isEffectiveRateLow: data.report.isEffectiveRateLow()
         )
         currencyCode = data.currencyCode
         hasAnyRate = data.hasAnyRate
@@ -79,7 +87,12 @@ struct ReportsProjectTable: View {
         static let billable: CGFloat = 84
         static let rate: CGFloat = 70
         static let amount: CGFloat = 92
+        static let effective: CGFloat = 70
     }
+
+    /// Tooltip der Spalte „Eff. Satz“.
+    static let effectiveRateHelp = "Betrag ÷ gesamte Zeit inkl. nicht abrechenbar"
+
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -116,6 +129,9 @@ struct ReportsProjectTable: View {
             Text("Abrechenbar").frame(width: Column.billable, alignment: .trailing)
             Text("Satz").frame(width: Column.rate, alignment: .trailing)
             Text("Betrag \(currencyCode)").frame(width: Column.amount, alignment: .trailing)
+            Text("Eff. Satz")
+                .frame(width: Column.effective, alignment: .trailing)
+                .help(Self.effectiveRateHelp)
         }
         .font(.system(size: 11, weight: .medium))
         .foregroundStyle(theme.tertiary)
@@ -182,6 +198,7 @@ struct ReportsProjectTable: View {
                     .monospacedDigit()
                     .foregroundStyle(hasAmount ? AnyShapeStyle(.primary) : AnyShapeStyle(theme.tertiary))
                     .frame(width: Column.amount, alignment: .trailing)
+                effectiveCell(hasAmount ? row.effectiveRate : nil, isLow: row.isEffectiveRateLow(), weight: .regular)
             }
             .lineLimit(1)
             .padding(.vertical, row.project.client == nil ? 10 : 8)
@@ -202,6 +219,18 @@ struct ReportsProjectTable: View {
     }
 
     private enum NumberStyle { case primary, secondary, tertiary }
+
+    /// Effektiver Satz, dezent; deutlich unter dem nominalen Satz in Orange.
+    private func effectiveCell(_ rate: Decimal?, isLow: Bool, weight: Font.Weight,
+                               help: String = ReportsProjectTable.effectiveRateHelp) -> some View {
+        Text(rate.map(ReportsFormat.money) ?? "–")
+            .font(.system(size: 12, weight: weight))
+            .monospacedDigit()
+            .foregroundStyle(rate == nil ? AnyShapeStyle(theme.tertiary)
+                             : isLow ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.secondary))
+            .frame(width: Column.effective, alignment: .trailing)
+            .help(rate == nil ? "" : help)
+    }
 
     private func number(_ text: String, width: CGFloat, style: NumberStyle) -> some View {
         Text(text)
@@ -377,6 +406,8 @@ struct ReportsProjectTable: View {
                 .monospacedDigit()
                 .foregroundStyle(hasAnyRate ? AnyShapeStyle(.primary) : AnyShapeStyle(theme.tertiary))
                 .frame(width: Column.amount, alignment: .trailing)
+            effectiveCell(hasAnyRate ? report.effectiveRate : nil, isLow: report.isEffectiveRateLow, weight: .semibold,
+                          help: "Betrag ÷ gesamte Business-Zeit inkl. nicht abrechenbar (ohne Privatzeit)")
         }
         .lineLimit(1)
         .padding(.vertical, 12)

@@ -311,7 +311,10 @@ final class IdleDetector {
             ID.startKey: decision.idleStart.timeIntervalSince1970,
             ID.endKey: decision.idleEnd.timeIntervalSince1970,
         ]
-        NotificationCategories.deliverNow(identifier: ID.request, content: content, center: center)
+        // In Ruhezeiten unterdrückt: Die Zeit bleibt dann erfasst (wie „Behalten“).
+        guard NotificationGate.allows(kind: .idle, settings: settings) else { return }
+        NotificationCategories.deliverNow(identifier: ID.request, content: content, kind: .idle,
+                                          settings: settings, center: center)
         Self.logger.info("Leerlauf-Mitteilung zugestellt.")
     }
 

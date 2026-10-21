@@ -83,9 +83,11 @@ final class BreakReminder: NSObject, UNUserNotificationCenterDelegate {
         reschedulePlanned()
     }
 
-    /// Nach Änderungen an den Pausen-Einstellungen aufrufen.
+    /// Nach Änderungen an den Pausen- oder Mitteilungs-Einstellungen (Ruhezeiten, geplanter Block)
+    /// aufrufen.
     func settingsDidChange() {
         reschedule()
+        reschedulePlanned()
     }
 
     // MARK: Planung
@@ -101,6 +103,9 @@ final class BreakReminder: NSObject, UNUserNotificationCenterDelegate {
         let fireDate = current.entry.startedAt.addingTimeInterval(duration)
         let delay = fireDate.timeIntervalSinceNow
         guard delay > 1 else { return }
+        // Fällt die Auslösezeit in eine Ruhezeit (oder aufs stille Wochenende), entfällt die
+        // Erinnerung samt Musik-Pause. Geänderte Einstellungen planen über `settingsDidChange` neu.
+        guard NotificationGate.allows(kind: .breakReminder, now: fireDate, settings: settings) else { return }
 
         let content = UNMutableNotificationContent()
         content.title = "Kurze Pause?"
@@ -152,6 +157,8 @@ final class BreakReminder: NSObject, UNUserNotificationCenterDelegate {
         guard let block = plannedBlock, let name = plannedProjectName, current == nil else { return }
         let delay = block.startAt.timeIntervalSinceNow
         guard delay > 1 else { return }
+        // Schalter `calendarPlannedBlockNotificationEnabled` und Ruhezeiten zum Beginn des Blocks.
+        guard NotificationGate.allows(kind: .plannedBlock, now: block.startAt, settings: settings) else { return }
 
         let content = UNMutableNotificationContent()
         content.title = "Geplant: \(name) um \(ClockFormat.time(block.startAt))"

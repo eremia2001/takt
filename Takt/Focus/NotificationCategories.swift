@@ -119,12 +119,17 @@ enum NotificationCategories {
         }
     }
 
-    /// Stellt eine Mitteilung sofort zu (gleiche Kennung ersetzt eine ältere).
+    /// Stellt eine Mitteilung sofort zu (gleiche Kennung ersetzt eine ältere) – nur, wenn
+    /// `NotificationGate` sie für `kind` erlaubt (Schalter, Ruhezeiten, Wochenende).
+    @MainActor
     static func deliverNow(
         identifier: String,
         content: UNNotificationContent,
+        kind: NotificationKind,
+        settings: some NotificationGateSettings,
         center: UNUserNotificationCenter = .current()
     ) {
+        guard NotificationGate.allows(kind: kind, settings: settings) else { return }
         let request = UNNotificationRequest(identifier: identifier, content: content, trigger: nil)
         Task {
             await requestAuthorizationIfNeeded(center: center)

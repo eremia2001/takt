@@ -34,13 +34,23 @@ struct TodayEventSegment: View {
 // MARK: - Hinweis „Termin läuft“
 
 /// „Termin ‚Review Gerlach‘ läuft – Timer auf Website“ mit „Wechseln zu …“ (nur mit Regel).
+/// Mit `calendarMeetingHintEnabled` aus (Einstellungen › Mitteilungen) bleibt die Zeile leer und
+/// nimmt im Stapel keinen Platz ein. Ohne `AppSettings` in der Umgebung (Vorschau) wird sie gezeigt.
 struct TodayMeetingHintRow: View {
     let hint: TodayData.MeetingHint
     let theme: DesignTheme
     let actions: TodayActions
     var dismiss: () -> Void = {}
 
+    @Environment(AppSettings.self) private var settings: AppSettings?
+
     var body: some View {
+        if settings?.calendarMeetingHintEnabled ?? true {
+            row
+        }
+    }
+
+    private var row: some View {
         HStack(alignment: .center, spacing: 10) {
             Image(systemName: "calendar")
                 .font(.system(size: 11, weight: .semibold))

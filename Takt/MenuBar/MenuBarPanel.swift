@@ -57,6 +57,8 @@ struct MenuBarPanelActions {
     var quickEntry = QuickEntryHandlers()
     /// „Schnelleingabe…“: Popover schließen, schwebendes Fenster öffnen.
     var openQuickEntry: () -> Void = {}
+    /// „Befehle…“: Hauptfenster nach vorn, Befehlspalette (⌘K) öffnen; `nil` = ohne Menüpunkt.
+    var openCommandPalette: (() -> Void)? = nil
 }
 
 struct MenuBarPanel: View {
@@ -104,6 +106,13 @@ struct MenuBarPanel: View {
                 openQuickEntry: data.showsQuickEntryField ? nil : actions.openQuickEntry
             )
             .padding(.top, 10)
+
+            // Eigene Zeile: In der Fußzeile ist kein Platz mehr (300 pt).
+            if let openCommandPalette = actions.openCommandPalette {
+                MenuBarCommandRow(theme: theme, action: openCommandPalette)
+                    .padding(.horizontal, 6)
+                    .padding(.bottom, 4)
+            }
 
             Rectangle()
                 .fill(theme.hairline)
@@ -406,5 +415,33 @@ private struct MenuBarFooterButton: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
+    }
+}
+
+/// Menüpunkt „Befehle…  ⌘K“: öffnet das Hauptfenster mit der Befehlspalette.
+private struct MenuBarCommandRow: View {
+    let theme: DesignTheme
+    let action: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Text("Befehle…")
+                    .foregroundStyle(isHovered ? .primary : .secondary)
+                Spacer(minLength: 8)
+                Text("⌘K")
+                    .foregroundStyle(theme.tertiary)
+            }
+            .font(.system(size: 12, weight: .medium))
+            .padding(.horizontal, 10)
+            .frame(height: 26)
+            .background(isHovered ? theme.track : .clear, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .help("Befehlspalette im Hauptfenster öffnen")
     }
 }
